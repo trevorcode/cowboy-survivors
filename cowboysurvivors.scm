@@ -1,6 +1,6 @@
-;; title:   game title
-;; author:  game developer, email, etc.
-;; desc:    short description
+;; title:   Cowboy Survivors
+;; author:  TofuTheLoafu
+;; desc:    Vampire Survivors-like but western themed with tic80
 ;; site:    website link
 ;; license: MIT License (change this to your license of choice)
 ;; version: 0.1
@@ -218,19 +218,26 @@
 	       (t80::spr 64
 			 (+ (car offset) (- (* 16 screen-x) sub-x))
 			 (+ (cadr offset) (- (* 16 screen-y) sub-y))
-			 15 1 0 (caddr offset) 4 2))
+			 15 1 0 (caddr offset) 2 2))
 	     '((-4 -4 0)
 	       (4 4 0))))
 	  (loop (+ i 1)))))
     ))
 
-(define (spacial-grid cell-size)
+(define (overlapping? a b)
+  (let* ((dist-x (- (a :x) (b :x)))
+	 (dist-y (- (a :y) (b :y)))
+	 (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
+	 (min-dist (+ (a :radius) (b :radius))))
+    (< dist-sq (* min-dist min-dist))))
+
+(define (collision-system cell-size)
   (define grid (hash-table))
   (define (cell-key x y)
     (cons (floor (/ x cell-size))
 	  (floor (/ y cell-size))))
 
-  (define (build-grid enemies)
+  (define (build-grid entities)
     (set! grid (hash-table))
     (for-each
      (lambda (e)
@@ -238,63 +245,71 @@
 	 (when (not (hash-table-ref grid key))
 	     (hash-table-set! grid key (list)))
 	 (hash-table-set! grid key (cons e (grid key)))))
-     enemies))
+     entities))
+
+  (define neighbor-offsets '((1 . 0) (1 . 1) (0 . 1) (-1 . 1)))
+
+  (define (find-collisions)
+    (let ((collisions (list)))
+      (for-each
+       (lambda (grid-entry)
+	 (let ((cx (car (car grid-entry)))
+	       (cy (cdr (car grid-entry)))
+	       (entities (cdr grid-entry)))
+	   (for (i 0 (length entities))
+		(for (j (+ i 1) (length entities))
+		(when (overlapping? (entities i) (entities j))
+		  (set! collisions (cons (cons (entities i) (entities j)) collisions)))))
+
+	   (for-each
+            (lambda (offset)
+              (let ((neighbor-cell (grid (cons (+ cx (car offset)) (+ cy (cdr offset))))))
+                (when neighbor-cell
+                  (for-each
+                   (lambda (a)
+                     (for-each
+                      (lambda (b)
+                        (when (overlapping? a b)
+                          (set! collisions (cons (cons a b) collisions))))
+                      neighbor-cell))
+                   entities))))
+            neighbor-offsets)))
+       grid)
+      collisions))
+
+  (lambda (entities)
+    (build-grid entities)
+    (find-collisions)))
 
   (define (push-apart! e other)
-    (let* ((dist-x (- (e :x) (other :x)))
-	   (dist-y (- (e :y) (other :y)))
-	   (dist-sq (+ (* dist-x dist-x)
-		       (* dist-y dist-y)))
-	   (min-dist (+ (e :radius) (other :radius))))
-      (when (< dist-sq (* min-dist min-dist))
-	(let* ((zero-dist? (= dist-sq 0))
-	       (dist (if zero-dist? 0.0 (sqrt dist-sq)))
-	       (dir-x (if zero-dist? 1.0 (/ dist-x dist)))
-	       (dir-y (if zero-dist? 0.0 (/ dist-y dist)))
-	       (overlap (* 0.5 (- min-dist dist)))
-	       (push-x (* overlap dir-x))
-	       (push-y (* overlap dir-y)))
-	  (t80::trace (object->string e))
-	  (t80::trace (object->string push-x))
-	  (set! (e :x) (+ (e :x) push-x))
-	  (set! (e :y) (+ (e :y) push-y))
-(t80::trace (object->string e))
-	  (set! (other :x) (- (other :x) push-x))
-	  (set! (other :y) (- (other :y) push-y))))))
+    (when (overlapping? e other)
+      (let* ((dist-x (- (e :x) (other :x)))
+	     (dist-y (- (e :y) (other :y)))
+	     (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
+	     (min-dist (+ (e :radius) (other :radius)))
+	     (zero-dist? (= dist-sq 0))
+	     (dist (if zero-dist? 0.0 (sqrt dist-sq)))
+	     (dir-x (if zero-dist? 1.0 (/ dist-x dist)))
+	     (dir-y (if zero-dist? 0.0 (/ dist-y dist)))
+	     (overlap (* 0.5 (- min-dist dist)))
+	     (push-x (* overlap dir-x))
+	     (push-y (* overlap dir-y)))
+	(set! (e :x) (+ (e :x) push-x))
+	(set! (e :y) (+ (e :y) push-y))
+	(set! (other :x) (- (other :x) push-x))
+	(set! (other :y) (- (other :y) push-y)))))
 
-  (define neighbor-offsets '((1 . 0)
-			     (1 . 1)
-			     (0 . 1)
-			     (-1 . 1)))
-
-  (define (resolve-overlaps)
-    (for-each
-     (lambda (entry)
-       (let ((cx (car (car entry)))
-	     (cy (cdr (car entry)))
-	     (entities (cdr entry)))
-	 (for (i 0 (length entities))
-	   (for (j (+ i 1) (length entities))
-		(push-apart! (entities i) (entities j))))
-
-	 (for-each
-	  (lambda (offset)
-	    (let* ((neighbor-key (cons (+ cx (car offset))
-				       (+ cy (cdr offset))))
-		   (neighbor-cell (grid neighbor-key)))
-	      (when neighbor-cell
-		(for-each
-		 (lambda (a)
-		   (for-each
-		    (lambda (b) (push-apart! a b))
-		    neighbor-cell))
-		 entities))))
-	  neighbor-offsets)))
-     grid))
-  (lambda* (action . args)
-    (case action
-      ((resolve-overlaps) (resolve-overlaps))
-      ((build-grid) (build-grid (car args))))))
+(define (dispatch-collision! collision-pair)
+  (let ((a (car collision-pair))
+	(b (cdr collision-pair)))
+    (cond
+     ((and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
+      (push-apart! a b))
+     ((and (eq? (a :type) :player) (eq? (b :type) :enemy))
+      (set! (a :hp) (- (a :hp) 1)))
+     ((and (eq? (a :type) :enemy) (eq? (b :type) :player))
+      (set! (b :hp) (- (b :hp) 1)))
+     (else #f))))
 
 (define (enemy-follow-player e player)
   (let* ((dx (- (player :x) (e :x)))
@@ -307,10 +322,13 @@
 	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
 	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))))
 
+(define (render-entity e x y)
+  (t80::spr (e :sprite) x y 15 1 0 0 1 1))
+
 (define (make-rat)
     (let ((coords (world->real-coords 25 25))) 
       (hash-table
-       :type :rat
+       :type :enemy
        :x (car coords)
        :y (cdr coords)
        :radius 4
@@ -320,32 +338,35 @@
        :hp 5
        :moving? #f)))
 
-(define (render-entity e x y)
-  (t80::spr (e :sprite) x y 15 1 0 0 1 1))
-
-(define enemies '())
-
-(for (i 0 10)
-     (set! enemies (cons (make-rat) enemies)))
-
 (define (render-hp hp)
   (for (i 0 hp)
        (t80::spr 272 (* i 9) 0 15 1 0 0 1 1)))
 
 (define (game-scene)
+
+  (define entities '())
+
+  (for (i 0 100)
+       (set! entities (cons (make-rat) entities)))
+
   (define game-map (generate-map 50)) 
-  (define spacial-grid (spacial-grid 16))
+  (define get-collisions (collision-system 16))
   (define cowboy
     (let ((coords (world->real-coords
 		   (quotient (game-map :width) 2)
 		   (quotient (game-map :height) 2)))) 
       (hash-table
+       :type :player
        :x (car coords)
        :y (cdr coords)
+       :radius 16
        :speed 10
        :upgrades (list)
+       :update (lambda (x y) #f)
        :hp 5
        :moving? #f)))
+
+  (set! entities (cons cowboy entities))
 
   (define (input)
     (if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
@@ -365,13 +386,13 @@
 
     (for-each
      (lambda (e)
-       ((e :update) e cowboy))
-     enemies)
+       (case (e :type)
+	 ((:enemy)
+	  ((e :update) e cowboy))))
+     entities)
 
-    (spacial-grid 'build-grid enemies)
-    (spacial-grid 'resolve-overlaps)
-
-    )
+    (define collisions (get-collisions entities))
+    (for-each dispatch-collision! collisions))
 
   (define (render cowboy)
     (t80::cls 0)
@@ -387,8 +408,10 @@
 
     (for-each 
      (lambda (e)
-       (render-entity e (camera-transform (e :x) (e :y))))
-     enemies)
+       (case (e :type)
+	 ((:enemy)
+	  (render-entity e (camera-transform (e :x) (e :y))))))
+     entities)
 
     (render-hp (cowboy :hp))
     )
@@ -425,12 +448,12 @@
 ;; 035:6666666600000000770777777077777770777770077777700077777070077770
 ;; 050:7707777777077777077077770070777770700777707707777007000000000000
 ;; 051:7700777077707770770077007000700770007007700070070000000700000000
-;; 064:fffff111ff111000f1000000f1000011f1000100100010001000100010001000
-;; 065:111111ff00000011000001001110010000100011001000100100010100000101
+;; 064:fffff111fff11000ff100000f1000011f1001100100010001001000110010010
+;; 065:111fffff00011fff000001ff1100001f0011001f000010011100010100100101
 ;; 066:ffffffff11111fff0100111f1000001100000000000010000000110000000100
 ;; 067:ffffffffffffffffffffffff1fffffff11ffffff01ffffff011fffff00011111
-;; 080:1000100010000100f1000011f1000000ff100000fff10000ffff1111ffffffff
-;; 081:00011000001000001100011100111001000000100000011111111fffffffffff
+;; 080:100100101001000110001000f1000100f1000011ff100000fff11000fffff111
+;; 081:0001010110010101000100010010001f1100001f000001ff00011fff111fffff
 ;; 082:11111000000000000011000000111100001ff11111ffffffffffffffffffffff
 ;; 083:000000110000011f000001ff00011fff1111ffffffffffffffffffffffffffff
 ;; </TILES>
