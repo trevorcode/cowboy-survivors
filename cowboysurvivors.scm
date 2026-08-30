@@ -62,6 +62,15 @@
 	      (loop (cdr lst) (cons element result))
 	      (loop (cdr lst) result))))))
 
+(define (find predicate lst)
+  (let loop ((lst lst))
+    (if (null? lst)
+	#f
+	(let ((element (car lst)))
+	  (if (predicate element)
+	      element
+	      (loop (cdr lst)))))))
+
 (define (list->random lst)
   (let ((len (length lst)))
     (list-ref lst (random len))))
@@ -231,6 +240,21 @@
 	 (min-dist (+ (a :radius) (b :radius))))
     (< dist-sq (* min-dist min-dist))))
 
+(define (within? a b dist)
+  (let* ((dist-x (- (a :x) (b :x)))
+	 (dist-y (- (a :y) (b :y)))
+	 (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y))))
+    (<= dist-sq (* dist dist))))
+
+(define (direction-to from to)
+  (let* ((dx (- (to :x) (from :x)))
+         (dy (- (to :y) (from :y)))
+         (dist-sq (+ (* dx dx) (* dy dy))))
+    (if (= dist-sq 0)
+        (cons 1.0 0.0)
+        (let ((dist (sqrt dist-sq)))
+          (cons (/ dx dist) (/ dy dist))))))
+
 (define (collision-system cell-size)
   (define grid (hash-table))
   (define (cell-key x y)
@@ -281,23 +305,23 @@
     (build-grid entities)
     (find-collisions)))
 
-  (define (push-apart! e other)
-    (when (overlapping? e other)
-      (let* ((dist-x (- (e :x) (other :x)))
-	     (dist-y (- (e :y) (other :y)))
-	     (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
-	     (min-dist (+ (e :radius) (other :radius)))
-	     (zero-dist? (= dist-sq 0))
-	     (dist (if zero-dist? 0.0 (sqrt dist-sq)))
-	     (dir-x (if zero-dist? 1.0 (/ dist-x dist)))
-	     (dir-y (if zero-dist? 0.0 (/ dist-y dist)))
-	     (overlap (* 0.5 (- min-dist dist)))
-	     (push-x (* overlap dir-x))
-	     (push-y (* overlap dir-y)))
-	(set! (e :x) (+ (e :x) push-x))
-	(set! (e :y) (+ (e :y) push-y))
-	(set! (other :x) (- (other :x) push-x))
-	(set! (other :y) (- (other :y) push-y)))))
+(define (push-apart! e other)
+  (when (overlapping? e other)
+    (let* ((dist-x (- (e :x) (other :x)))
+	   (dist-y (- (e :y) (other :y)))
+	   (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
+	   (min-dist (+ (e :radius) (other :radius)))
+	   (zero-dist? (= dist-sq 0))
+	   (dist (if zero-dist? 0.0 (sqrt dist-sq)))
+	   (dir-x (if zero-dist? 1.0 (/ dist-x dist)))
+	   (dir-y (if zero-dist? 0.0 (/ dist-y dist)))
+	   (overlap (* 0.5 (- min-dist dist)))
+	   (push-x (* overlap dir-x))
+	   (push-y (* overlap dir-y)))
+      (set! (e :x) (+ (e :x) push-x))
+      (set! (e :y) (+ (e :y) push-y))
+      (set! (other :x) (- (other :x) push-x))
+      (set! (other :y) (- (other :y) push-y)))))
 
 (define (dispatch-collision! collision-pair)
   (let ((a (car collision-pair))
@@ -309,64 +333,145 @@
       (set! (a :hp) (- (a :hp) 1)))
      ((and (eq? (a :type) :enemy) (eq? (b :type) :player))
       (set! (b :hp) (- (b :hp) 1)))
+     ((and (eq? (a :type) :projectile) (eq? (b :type) :enemy))
+      (set! (b :hp) (- (b :hp) (a :damage)))
+      (set! (a :destroy?) #t))
+
+     ((and (eq? (a :type) :enemy) (eq? (b :type) :projectile))
+      (set! (a :hp) (- (a :hp) (b :damage)))
+      (set! (b :destroy?) #t))
      (else #f))))
 
-(define (enemy-follow-player e player)
-  (let* ((dx (- (player :x) (e :x)))
-	 (dy (- (player :y) (e :y)))
-	 (dist-sq (+ (* dx dx) (* dy dy))))
-    (when (< 0 dist-sq)
-      (let* ((dist (sqrt dist-sq))
-	     (dir-x (/ dx dist))
-	     (dir-y (/ dy dist)))
-	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
-	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))))
+(define (enemy-follow-player e)
+  (when (<= (e :hp) 0)
+    (set! (e :destroy?) #t))
+  (let* ((dir (direction-to e (e :target)))
+	 (dir-x (car dir))
+	 (dir-y (cdr dir)))
+    (set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
+    (set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
 
-(define (render-entity e x y)
-  (t80::spr (e :sprite) x y 15 1 0 0 1 1))
+(define (render-entity e)
+  (t80::spr (e :sprite) (camera-transform (e :x) (e :y)) 15 1 0 0 1 1))
 
-(define (make-rat)
-    (let ((coords (world->real-coords 25 25))) 
+(define (make-rat target)
+    (let ((coords (world->real-coords 20 20))) 
       (hash-table
        :type :enemy
        :x (car coords)
        :y (cdr coords)
        :radius 4
        :speed 3
+       :target target
        :update enemy-follow-player
        :sprite 64
        :hp 5
        :moving? #f)))
 
+(define (make-cowboy game-map)
+  (let* ((coords (world->real-coords
+		  (quotient (game-map :width) 2)
+		  (quotient (game-map :height) 2)))
+	 (cowboy  
+	  (hash-table
+	   :type :player
+	   :x (car coords)
+	   :y (cdr coords)
+	   :radius 8
+	   :speed 10
+	   :upgrades (list)
+	   :update (lambda (x y) #f)
+	   :hp 5
+	   :moving? #f)))
+    (set! (cowboy :upgrades) (cons (make-revolver cowboy) (cowboy :upgrades)))
+    cowboy))
+
 (define (render-hp hp)
   (for (i 0 hp)
        (t80::spr 272 (* i 9) 0 15 1 0 0 1 1)))
 
+(define (make-bullet x y direction speed)
+  (define (update e)
+    (set! (e :duration) (- (e :duration) 1))
+    (when (<= (e :duration) 0)
+      (set! (e :destroy?) #t))
+    (let* ((dir-x (car direction))
+	   (dir-y (cdr direction)))
+      (set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
+      (set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
+
+  (define (render self)
+    (t80::spr 272 (camera-transform (self :x) (self :y)) 15 1 0 0 1 1))
+
+  (hash-table :x x
+	      :y y
+	      :radius 8
+	      :speed speed
+	      :type :projectile
+	      :duration 120
+	      :damage 5
+	      :update update
+	      :render render))
+
+(define (make-revolver cowboy)
+  (define (update self entity-store)
+    (set! (self :cooldown) (- (self :cooldown) 1))
+    (when (or (not (self :target))
+	      ((self :target) :destroy?))
+      (let ((target (find (lambda (e)
+			    (and (eq? (e :type) :enemy)
+				 (within? cowboy e 64)))
+			  (entity-store))))
+	(set! (self :target) target)))
+
+    (when (and (self :target)
+	       (<= (self :cooldown) 0))
+      (set! (self :cooldown) (self :max-cooldown))
+      (entity-store 'add! (make-bullet (cowboy :x)
+				       (cowboy :y)
+				       (direction-to cowboy (self :target))
+				       40))))
+
+  (define (render self)
+    (when (self :target)
+      (let ((target (self :target)))
+	(t80::spr 272 (camera-transform (target :x) (target :y)) 15 1 0 0 1 1))))
+
+  (hash-table
+   :player cowboy
+   :cooldown 60
+   :max-cooldown 60
+   :target #f
+   :damage 1
+   :update update
+   :render render))
+
+(define (make-entity-store)
+  (define entities (list))
+
+  (define (add! e)
+    (set! entities (cons e entities)))
+
+  (define (remove-destroyed!)
+    (set! entities (filter (lambda (e) (not (e :destroy?))) entities)))
+
+  (lambda* (action . args)
+    (case action
+      ((add!) (add! (car args)))
+      ((remove-destroyed!) (remove-destroyed!))
+      (else entities))))
+
 (define (game-scene)
 
-  (define entities '())
-
-  (for (i 0 100)
-       (set! entities (cons (make-rat) entities)))
+  (define entity-store (make-entity-store))
 
   (define game-map (generate-map 50)) 
   (define get-collisions (collision-system 16))
-  (define cowboy
-    (let ((coords (world->real-coords
-		   (quotient (game-map :width) 2)
-		   (quotient (game-map :height) 2)))) 
-      (hash-table
-       :type :player
-       :x (car coords)
-       :y (cdr coords)
-       :radius 16
-       :speed 10
-       :upgrades (list)
-       :update (lambda (x y) #f)
-       :hp 5
-       :moving? #f)))
+  (define cowboy (make-cowboy game-map))
 
-  (set! entities (cons cowboy entities))
+  (entity-store 'add! cowboy)
+  (for (i 0 5)
+       (entity-store 'add! (make-rat cowboy)))
 
   (define (input)
     (if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
@@ -380,6 +485,7 @@
 	(set! (cowboy :moving?) #f)))
 
   (define (update)
+    (entity-store 'remove-destroyed!)
     (hash-table-set! *camera* :target-x (cowboy :x))
     (hash-table-set! *camera* :target-y (cowboy :y))
     (update-camera!)
@@ -388,10 +494,18 @@
      (lambda (e)
        (case (e :type)
 	 ((:enemy)
-	  ((e :update) e cowboy))))
-     entities)
+	  ((e :update) e))
+	 ((:projectile)
+	  ((e :update) e))
+	 ))
+     (entity-store))
 
-    (define collisions (get-collisions entities))
+    (for-each
+     (lambda (upgrade)
+       ((upgrade :update) upgrade entity-store))
+     (cowboy :upgrades))
+
+    (define collisions (get-collisions (entity-store)))
     (for-each dispatch-collision! collisions))
 
   (define (render cowboy)
@@ -410,8 +524,17 @@
      (lambda (e)
        (case (e :type)
 	 ((:enemy)
-	  (render-entity e (camera-transform (e :x) (e :y))))))
-     entities)
+	  (render-entity e))
+	 ((:projectile)
+	  ((e :render) e))
+	 ))
+
+     (entity-store))
+
+    (for-each
+     (lambda (upgrade)
+       ((upgrade :render) upgrade))
+     (cowboy :upgrades))
 
     (render-hp (cowboy :hp))
     )
