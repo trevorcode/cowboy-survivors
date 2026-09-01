@@ -328,21 +328,26 @@
 	(set! (other :x) (- (other :x) push-x))
 	(set! (other :y) (- (other :y) push-y)))))
 
+  (define *collision-handlers* (hash-table))
+
+  (define (on-collision! a-type b-type handler)
+    (hash-table-set! *collision-handlers* (cons a-type b-type) handler))
+
   (define (dispatch-collision! collision-pair)
     (let* ((a (car collision-pair))
 	   (b (cdr collision-pair))
 	   (a-type (a :type))
 	   (b-type (b :type)))
+      (cond ((*collision-handlers* (cons a-type b-type)) => (lambda (h) (h a b)))
+	    ((*collision-handlers* (cons b-type a-type)) => (lambda (h) (h b a)))
+	    (else #f))))
+
+  (define (dispatch-collision-old! collision-pair)
+    (let* ((a (car collision-pair))
+	   (b (cdr collision-pair))
+	   (a-type (a :type))
+	   (b-type (b :type)))
       (cond
-       ((and (eq? a-type :enemy) (eq? b-type :enemy))
-	(push-apart! a b))
-       ((and (eq? a-type :player) (eq? b-type :enemy))
-	(damage-cowboy! a 1))
-       ((and (eq? a-type :enemy) (eq? b-type :player))
-	(damage-cowboy! b 1))
-       ((and (eq? a-type :projectile) (eq? b-type :enemy))
-	(damage-enemy! b (a :damage))
-	(set! (a :destroy?) #t))
 
        ((and (eq? a-type :enemy) (eq? b-type :projectile))
 	(damage-enemy! a (b :damage))
@@ -351,28 +356,21 @@
        ((and (eq? a-type :enemy) (eq? b-type :projectile))
 	(set! (a :hp) (- (a :hp) (b :damage)))
 	(set! (b :destroy?) #t))
-
-       ((and (eq? a-type :xp) (eq? b-type :player))
-	(set! (a :destroy?) #t)
-	(set! (b :xp) (+ (b :xp) 1)))
-
-       ((and (eq? a-type :player) (eq? b-type :xp))
-	(set! (b :destroy?) #t)
-	(set! (a :xp) (+ (a :xp) 1)))
-
+       
        (else #f)))))
-
 
 (module enemies 
 
-    (import physics)
-    (define (enemy-follow-player e)
-      (let* ((dir (direction-to e (e :target)))
-	     (dir-x (car dir))
-	     (dir-y (cdr dir)))
-	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
-	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
+  (import physics)
 
+       
+  (define (enemy-follow-player e)
+    (let* ((dir (direction-to e (e :target)))
+	   (dir-x (car dir))
+	   (dir-y (cdr dir)))
+      (set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
+      (set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
+  
   (define (render-entity e)
     (if (e :white-flash?)
 	(begin 
@@ -381,7 +379,7 @@
 	  (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
 	
 	(t80::spr (e :sprite) (camera-transform (e :x) (e :y)) 15 1 0 0 1 1)))
-
+  
   (define (make-rat target)
     (let ((coords (world->real-coords 20 20))) 
       (hash-table
@@ -407,6 +405,17 @@
 	 (set! (e :white-flash?) #f)
 	 (set! (e :hit-debounce) #f)))))
 
+  (on-collision!
+   :enemy :enemy
+   (lambda (a b)
+     (push-apart! a b)))
+
+  (on-collision!
+   :projectile :enemy
+   (lambda (a b)
+     (damage-enemy! b (a :damage))
+     (set! (a :destroy?) #t)))
+
   (define (make-xp-orb x y)
     (hash-table
      :type :xp
@@ -415,9 +424,233 @@
      :radius 8
      :sprite 259)))
 
+
+(module ui-module 
+  (import-as coroutines co/)
+  (define (render-hp hp)
+    (for (i 0 hp)
+      (t80::spr 272 (* i 9) 0 15 1 0 0 1 1)))
+
+  (define (render-xp xp xp-needed)
+    (t80::rect 0 0 (floor (* screen-width (/ xp xp-needed))) 4 9))
+
+  (define* (shake-effect! intensity (duration 20))
+    (co/spawn! 
+     (lambda (yield)
+       (do ((i 0 (+ i 1))) ((= i duration))
+	 (t80::poke #x3FF9 (- (random (+ 1 (* 2 intensity))) intensity))
+	 (t80::poke (+ #x3FF9 1) (- (random (+ 1 (* 2 intensity))) intensity))
+	 (yield))
+       (t80::memset #x3FF9 0 2))))
+
+  (define (draw-sprite sx sy scale angle mx my mw mh key)
+    (define sv (vector (vector -1 -1 0 0)
+		       (vector 1 -1 0.999 0)
+		       (vector -1 1 0 0.999)
+		       (vector 1 1 0.999 0.999))) 
+    (define scale-x (* (ash mw 2) scale))
+    (define scale-y (* (ash mh 2) scale))
+    
+    (let loop ((p 0))
+      (when (< p (length sv))
+	(let* ((_sx (* (vector-ref sv p 0) scale-x))
+	       (_sy (* (vector-ref sv p 1) scale-y))
+	       (a (* -1 angle))
+	       (rx (- (* _sx (cos a)) (* _sy (sin a))))
+	       (ry (+ (* _sx (sin a)) (* _sy (cos a)))))
+	  (vector-set! sv p 0 (round (+ rx sx)))
+	  (vector-set! sv p 1 (round (+ ry sy)))
+	  (vector-set! sv p 2 (round (+ (ash mx 3) (* (vector-ref sv p 2) (ash mw 3)))))
+	  (vector-set! sv p 3 (round (+ (ash my 3) (* (vector-ref sv p 3) (ash mh 3)))))
+	  (loop (+ 1 p)))))
+    (t80::ttri (sv 0 0) (sv 0 1)
+	       (sv 1 0) (sv 1 1)
+	       (sv 2 0) (sv 2 1)
+	       (sv 0 2) (sv 0 3)
+	       (sv 1 2) (sv 1 3)
+	       (sv 2 2) (sv 2 3) 0 key)
+    
+    (t80::ttri (sv 1 0) (sv 1 1)
+	       (sv 2 0) (sv 2 1)
+	       (sv 3 0) (sv 3 1)
+	       (sv 1 2) (sv 1 3)
+	       (sv 2 2) (sv 2 3)
+	       (sv 3 2) (sv 3 3) 0 key)))
+
+(module entity-helpers
+  (define (update-duration e)
+      (when (e :duration)
+	(set! (e :duration) (- (e :duration) 1))
+	(when (<= (e :duration) 0)
+	  (set! (e :destroy?) #t))))
+
+  (define (update-direction e)
+    (when (e :direction)
+      (let* ((dir-x (car (e :direction)))
+	     (dir-y (cdr (e :direction))))
+	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
+	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))))
+
+(module weapon
+    (define (update-weapon! self entity-store)
+      #t
+      
+      )
+
+  )
+
+(module projectile
+  (define (update-bullet e) #t)
+  
+  (define (render-bullet self)
+    (t80::spr (self :sprite) (camera-transform (self :x) (self :y)) 15 1 0 0 1 1))
+
+  (define (make-projectile x y direction speed damage)
+    (hash-table :x x
+		:y y
+		:radius 6
+		:speed speed
+		:type :projectile
+		:direction direction
+		:sprite 258
+		:duration 120
+		:damage damage
+		:update update-bullet
+		:render render-bullet)))
+
+(module revolver 
+  (import projectile)
+
+  (define (make-bullet x y direction speed damage)
+    (make-projectile x y direction speed damage))
+
+  (define (render-revolver self)
+    (when (self :target)
+	(let ((target (self :target)))
+	  (t80::spr 257 (camera-transform (- (target :x) 3) (- (target :y) 3)) 15 2 0 0 1 1))))
+  
+  (define (update-revolver self entity-store)
+    (let ((cowboy (self :player)))
+      (set! (self :cooldown) (- (self :cooldown) 1))
+      (when (or (not (self :target))
+		((self :target) :destroy?))
+	(let ((target (find (lambda (e)
+			      (and (eq? (e :type) :enemy)
+				   (within? cowboy e (self :range))))
+			    (entity-store))))
+	  (set! (self :cooldown) (self :max-cooldown))
+	  (set! (self :target) target)))
+      
+      (when (and (self :target)
+		 (<= (self :cooldown) 0))
+	(set! (self :cooldown) (self :max-cooldown))
+	(entity-store 'add! (make-bullet (cowboy :x)
+					 (cowboy :y)
+					 (direction-to cowboy (self :target))
+					 40
+					 (self :damage))))))
+(define revolver-blueprint
+      (hash-table
+       :id :revolver
+       :type :upgrade
+       :name "Revolver"
+       :description "Targets 1 enemy at a time, fires a bullet"
+       :cooldown 60 
+       :max-cooldown 60 
+       :range 64 
+       :target #f
+       :damage 6 
+       :stats '(:max-cooldown :range :damage)
+       :update update-revolver
+       :render render-revolver))
+
+  (define (make-revolver cowboy)
+    (set! (revolver-blueprint :player) cowboy)
+    revolver-blueprint))
+
+(module entity-store 
+  (import utility)
+  (import events)
+  (import-as entity-helpers eh/)  
+  
+  (define (make-entity-store)
+    (define entities (list))
+
+    (define (add! e)
+      (set! entities (cons e entities)))
+
+    (define (remove-destroyed!)
+      (set! entities (filter (lambda (e) (not (e :destroy?))) entities)))
+
+    (lambda* (action . args)
+      (case action
+	((add!) (add! (car args)))
+	((remove-destroyed!) (remove-destroyed!))
+	(else entities))))
+
+  (define (update-entity e)
+    (eh/update-duration e)
+    (eh/update-direction e)
+    
+    (case (e :type)
+      ((:enemy)
+       (when (and (e :hp) (<= (e :hp) 0))
+	 (when (e :drop-xp)
+	   (add-event! (list 'spawn-xp (e :x) (e :y) (e :drop-xp))))
+	 (set! (e :destroy?) #t))
+       ((e :update) e))
+
+      ((:projectile)
+       ((e :update) e)))))
+
+(module gear-catalog
+  (import revolver)
+  (import utility)
+  (define *level-up-menu* #f)
+
+  (define (get-level-up-menu)
+    *level-up-menu*)
+
+  (define *gear-catalog*
+    (hash-table
+     :revolver (cons revolver-blueprint make-revolver))) 
+
+  (define (choose-upgrade-options)
+    (define gear-catalog-list (map values *gear-catalog*)) 
+    (list 
+     (cdr (list->random gear-catalog-list))
+     (cdr (list->random gear-catalog-list))
+     (cdr (list->random gear-catalog-list))))
+
+  (define (apply-gear! cowboy upgrade)
+    (let* ((new-upgrade ((cdr upgrade) cowboy)))
+      (set! (cowboy :upgrades) (cons new-upgrade (cowboy :upgrades)))
+      cowboy))
+
+  (define (open-level-up-menu!)
+    (set! *level-up-menu* (hash-table :options (choose-upgrade-options)
+				      :selected 0)))
+
+  (define (render-level-up-menu)
+    (t80::rect 30 20 (- screen-width 60) (- screen-height 40) 2)
+    (for-each
+     (lambda (option i)
+       (let ((card-start-x (+ 35 (* i 60)))
+	     (card-start-y 40)
+	     (option (car option)))
+	 (t80::rect card-start-x card-start-y 50 50 3)
+	 (t80::print (option :name) (+ 2 card-start-x) (+ 2 card-start-y) 0)))
+     (*level-up-menu* :options)
+     (range (length (*level-up-menu* :options))))))
+
 (module cowboy-module
-    (import camera)
-    (define (damage-cowboy! e amount)
+  (import camera)
+  (import gear-catalog)
+  (import-as physics physics/) 
+  
+  (define-constant cowboy-sprite 256)
+
+  (define (damage-cowboy! e amount)
       (when (not (e :hit-debounce))
 	(set! (e :hp) (- (e :hp) amount))
 	(shake-effect! 2 10)
@@ -445,9 +678,28 @@
       (when (cowboy :white-flash?)
 	(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))))
 
-  
-  (define cowboy-sprite 256)
+  (define (xp-needed level)
+    (* level 5))
 
+  (define (level-up! cowboy)
+    (set! (cowboy :level) (+ 1 (cowboy :level)))
+    (set! (cowboy :xp) 0)
+    (open-level-up-menu!))
+
+  (define (collect-xp! cowboy amount)
+    (set! (cowboy :xp) (+ amount (cowboy :xp)))
+    (when (<= (xp-needed (cowboy :level)) (cowboy :xp))
+      (level-up! cowboy)))
+
+  (physics/on-collision! :xp :player
+		 (lambda (a cowboy)
+		   (set! (a :destroy?) #t)
+		   (collect-xp! cowboy 1)))
+
+  (physics/on-collision! :player :enemy
+		 (lambda (a b)
+		   (damage-cowboy! a 1)))
+  
   (define (make-cowboy world-x world-y)
     (let* ((coords (world->real-coords world-x world-y))
 	   (cowboy  
@@ -465,214 +717,11 @@
 	     :moving? #f)))
       cowboy)))
 
-(module ui-module 
-    (import-as coroutines co/)
-    (define (render-hp hp)
-      (for (i 0 hp)
-	   (t80::spr 272 (* i 9) 0 15 1 0 0 1 1)))
-
-(define* (shake-effect! intensity (duration 20))
-  (co/spawn! 
-   (lambda (yield)
-     (do ((i 0 (+ i 1))) ((= i duration))
-       (t80::poke #x3FF9 (- (random (+ 1 (* 2 intensity))) intensity))
-       (t80::poke (+ #x3FF9 1) (- (random (+ 1 (* 2 intensity))) intensity))
-       (yield))
-     (t80::memset #x3FF9 0 2))))
-
-(define (draw-sprite sx sy scale angle mx my mw mh key)
-  (define sv (vector (vector -1 -1 0 0)
-		     (vector 1 -1 0.999 0)
-		     (vector -1 1 0 0.999)
-		     (vector 1 1 0.999 0.999))) 
-  (define scale-x (* (ash mw 2) scale))
-  (define scale-y (* (ash mh 2) scale))
-
-  (let loop ((p 0))
-    (when (< p (length sv))
-      (let* ((_sx (* (vector-ref sv p 0) scale-x))
-	     (_sy (* (vector-ref sv p 1) scale-y))
-	     (a (* -1 angle))
-	     (rx (- (* _sx (cos a)) (* _sy (sin a))))
-	     (ry (+ (* _sx (sin a)) (* _sy (cos a)))))
-	(vector-set! sv p 0 (round (+ rx sx)))
-	(vector-set! sv p 1 (round (+ ry sy)))
-	(vector-set! sv p 2 (round (+ (ash mx 3) (* (vector-ref sv p 2) (ash mw 3)))))
-	(vector-set! sv p 3 (round (+ (ash my 3) (* (vector-ref sv p 3) (ash mh 3)))))
-	(loop (+ 1 p)))))
-  (t80::ttri (sv 0 0) (sv 0 1)
-	     (sv 1 0) (sv 1 1)
-	     (sv 2 0) (sv 2 1)
-	     (sv 0 2) (sv 0 3)
-	     (sv 1 2) (sv 1 3)
-	     (sv 2 2) (sv 2 3) 0 key)
-
-  (t80::ttri (sv 1 0) (sv 1 1)
-	     (sv 2 0) (sv 2 1)
-	     (sv 3 0) (sv 3 1)
-	     (sv 1 2) (sv 1 3)
-	     (sv 2 2) (sv 2 3)
-	     (sv 3 2) (sv 3 3) 0 key))
-
-
-
-  )
-
-
-(module revolver 
-    (define (make-bullet x y direction speed damage)
-      (define (update e)
-	(set! (e :duration) (- (e :duration) 1))
-	(when (<= (e :duration) 0)
-	  (set! (e :destroy?) #t))
-	(let* ((dir-x (car direction))
-	       (dir-y (cdr direction)))
-	  (set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
-	  (set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
-
-      (define (render self)
-	(t80::spr 258 (camera-transform (self :x) (self :y)) 15 1 0 0 1 1))
-
-      (hash-table :x x
-		  :y y
-		  :radius 6
-		  :speed speed
-		  :type :projectile
-		  :duration 120
-		  :damage damage
-		  :update update
-		  :render render))
-
-  (define (make-revolver base-stats cowboy)
-    (define (update self entity-store)
-      (set! (self :cooldown) (- (self :cooldown) 1))
-      (when (or (not (self :target))
-		((self :target) :destroy?))
-	(let ((target (find (lambda (e)
-			      (and (eq? (e :type) :enemy)
-				   (within? cowboy e (self :range))))
-			    (entity-store))))
-	  (set! (self :cooldown) (self :max-cooldown))
-	  (set! (self :target) target)))
-
-      (when (and (self :target)
-		 (<= (self :cooldown) 0))
-	(set! (self :cooldown) (self :max-cooldown))
-	(entity-store 'add! (make-bullet (cowboy :x)
-					 (cowboy :y)
-					 (direction-to cowboy (self :target))
-					 40
-					 (self :damage)))))
-
-    (define (render self)
-      (when (self :target)
-	(let ((target (self :target)))
-	  (t80::spr 257 (camera-transform (- (target :x) 3) (- (target :y) 3)) 15 2 0 0 1 1))))
-
-    (hash-table
-     :player cowboy
-     :type :upgrade
-     :id :revolver
-     :cooldown (base-stats :max-cooldown)
-     :max-cooldown (base-stats :max-cooldown)
-     :range (base-stats :range)
-     :target #f
-     :damage (base-stats :damage)
-     :update update
-     :render render)))
-
-(module entity-store 
-  (import utility)
-  (import events)
-  
-  (define (make-entity-store)
-    (define entities (list))
-
-    (define (add! e)
-      (set! entities (cons e entities)))
-
-    (define (remove-destroyed!)
-      (set! entities (filter (lambda (e) (not (e :destroy?))) entities)))
-
-    (lambda* (action . args)
-      (case action
-	((add!) (add! (car args)))
-	((remove-destroyed!) (remove-destroyed!))
-	(else entities))))
-
-  (define (update-entity e)
-    (case (e :type)
-      ((:enemy)
-       (when (and (e :hp) (<= (e :hp) 0))
-	 (when (e :drop-xp)
-	   (add-event! (list 'spawn-xp (e :x) (e :y) (e :drop-xp))))
-	 (set! (e :destroy?) #t))
-       ((e :update) e))
-      ((:projectile)
-       ((e :update) e)))))
-
-(module upgrade-catalog
-  (import revolver)
-  (import utility)
-  (define *level-up-menu* #f)
-
-  (define *upgrade-catalog*
-    (hash-table
-     :revolver (hash-table :id :revolver
-			   :name "Revolver"
-			   :description "Targets 1 enemy at a time, fires a bullet"
-			   :make make-revolver
-			   :base-stats (hash-table
-					:max-cooldown 60
-					:range 64
-					:damage 6)
-			   :level-up (hash-table
-				      :damage 1))))
-
-  (define (xp-needed level)
-    (* level 5))
-
-  (define (choose-upgrade-options)
-    (define upgrade-catalog-list (map values *upgrade-catalog*)) 
-    (list 
-     (cdr (list->random upgrade-catalog-list))
-     (cdr (list->random upgrade-catalog-list))
-     (cdr (list->random upgrade-catalog-list))))
-
-  (define (apply-upgrade! cowboy upgrade)
-    (let* ((cowboy-upgrades (cowboy :upgrades))
-	   (existing (find (lambda (u) (eq? (u :id) (upgrade :id))) cowboy-upgrades)))
-      (if existing
-	  (merge-hash-table-into! existing (upgrade :level-up) +)
-	  (let ((new-upgrade ((upgrade :make) (upgrade :base-stats) cowboy)))
-	    (set! (cowboy :upgrades) (cons new-upgrade cowboy-upgrades))))
-      cowboy))
-
-
-  (define (level-up-sequence! )
-    (set! *level-up-menu* (hash-table :options (choose-upgrade-options)
-				      :selected 0)))
-
-  (define (render-level-up-menu)
-    (t80::rect 30 20 (- screen-width 60) (- screen-height 40) 2)
-    (for-each
-     (lambda (option i)
-       (let ((card-start-x (+ 35 (* i 60)))
-	     (card-start-y 40))
-	 (t80::rect card-start-x card-start-y 50 50 3)
-	 (t80::print (option :name) (+ 2 card-start-x) (+ 2 card-start-y) 0)
-	 )
-       )
-     (*level-up-menu* :options)
-     (range (length (*level-up-menu* :options)))))
-
-  (level-up-sequence!))
-
 (module game-scene-module 
   (import-as physics physics/)
   (import entity-store)
   (import cowboy-module)
-  (import upgrade-catalog)
+  (import gear-catalog)
   (import ui-module)
   (import enemies)
   (import world)
@@ -681,23 +730,24 @@
     (define entity-store (make-entity-store))
     (define game-map (generate-map 50)) 
     (define get-collisions (physics/collision-system 16))
-    (define cowboy (apply-upgrade! (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2))
-				   (*upgrade-catalog* :revolver)))
+    (define cowboy (apply-gear! (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2))
+				   (*gear-catalog* :revolver)))
 
     (entity-store 'add! cowboy)
     (for (i 0 5)
 	 (entity-store 'add! (make-rat cowboy)))
 
     (define (input)
-      (if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
-      (if (t80::btn 1) (set! (cowboy :y) (+ (* (cowboy :speed) 0.05) (cowboy :y))))
-      (if (t80::btn 2) (set! (cowboy :x) (- (cowboy :x) (* (cowboy :speed) 0.05))))
-      (if (t80::btn 0) (set! (cowboy :y) (- (cowboy :y) (* (cowboy :speed) 0.05))))
-      
-      (if (or (t80::btn 0) (t80::btn 1)
-	      (t80::btn 2) (t80::btn 3))
-	  (set! (cowboy :moving?) #t)
-	  (set! (cowboy :moving?) #f)))
+      (when (not (get-level-up-menu))
+	(if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
+	(if (t80::btn 1) (set! (cowboy :y) (+ (* (cowboy :speed) 0.05) (cowboy :y))))
+	(if (t80::btn 2) (set! (cowboy :x) (- (cowboy :x) (* (cowboy :speed) 0.05))))
+	(if (t80::btn 0) (set! (cowboy :y) (- (cowboy :y) (* (cowboy :speed) 0.05))))
+	
+	(if (or (t80::btn 0) (t80::btn 1)
+		(t80::btn 2) (t80::btn 3))
+	    (set! (cowboy :moving?) #t)
+	    (set! (cowboy :moving?) #f))))
 
     (define (update)
       (entity-store 'remove-destroyed!)
@@ -705,20 +755,21 @@
       (hash-table-set! *camera* :target-y (cowboy :y))
       (update-camera!)
 
-      (for-each update-entity (entity-store))
+      (when (not (get-level-up-menu))
+	(for-each update-entity (entity-store))
 
-      (for-each
-       (lambda (upgrade)
-	 ((upgrade :update) upgrade entity-store))
-       (cowboy :upgrades))
+	(for-each
+	 (lambda (upgrade)
+	   ((upgrade :update) upgrade entity-store))
+	 (cowboy :upgrades))
 
-      (define collisions (get-collisions (entity-store)))
-      (for-each dispatch-collision! collisions)
+	(define collisions (get-collisions (entity-store)))
+	(for-each dispatch-collision! collisions))
+
       (process-events
        (lambda (event)
 	 (case (car event)
-	   ((spawn-xp) (entity-store 'add! (make-xp-orb (cadr event) (caddr event)))))))
-      )
+	   ((spawn-xp) (entity-store 'add! (make-xp-orb (cadr event) (caddr event))))))))
 
     (define (render cowboy)
       (t80::cls 0)
@@ -739,9 +790,12 @@
        (lambda (upgrade)
 	 ((upgrade :render) upgrade))
        (cowboy :upgrades))
+     
 
       (render-hp (cowboy :hp))
-					;(render-level-up-menu)
+      (render-xp (cowboy :xp) (xp-needed (cowboy :level)))
+      (when (get-level-up-menu)
+	(render-level-up-menu))
       )
 
     (lambda ()
