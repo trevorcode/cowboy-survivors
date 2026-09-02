@@ -139,7 +139,7 @@
   (define *scenes* (list))
   (define (push-scene! scene) (set! *scenes* (cons scene *scenes*))) 
   (define (pop-scene!) (set! *scenes* (cdr *scenes*))) 
-  (define (replace-scene! scene) (set! *scenes* (cons scene (cdr *scenes*)))) 
+  (define (set-scene! scene) (set! *scenes* (list scene))) 
   (define (current-scene) (car *scenes*))
 
   (define (run-scenes!)
@@ -571,7 +571,7 @@
 					 (direction-to cowboy (self :target))
 					 40
 					 (self :damage))))))
-(define revolver-blueprint
+  (define (revolver-blueprint)
       (hash-table
        :id :revolver
        :type :upgrade
@@ -587,8 +587,9 @@
        :render render-revolver))
 
   (define (make-revolver cowboy)
-    (set! (revolver-blueprint :player) cowboy)
-    revolver-blueprint))
+    (let ((new-revolver (revolver-blueprint)))
+      (set! (new-revolver :player) cowboy)
+      new-revolver)))
 
 (module entity-store 
   (import utility)
@@ -631,7 +632,7 @@
 
   (define *gear-catalog*
     (hash-table
-     :revolver (cons revolver-blueprint make-revolver))) 
+     :revolver (cons (revolver-blueprint) make-revolver))) 
 
   (define (choose-upgrade-options)
     (define gear-catalog-list (map values *gear-catalog*)) 
@@ -765,6 +766,21 @@
       (let ((coords (get-random-position-radius-cowboy cowboy 128)))
 	(entity-store 'add! (make-rat (car coords) (cdr coords) cowboy))))))
 
+(module game-over-scene
+  (import scene-module)
+
+  (define (render-game-over-scene)
+    (t80::print "Game Over" 30 30 2)
+    (t80::print "Game Over" 31 31 0)
+    (t80::print "Press X to continue" 31 61 0))
+
+  (define (make-game-over-scene on-restart)
+    (hash-table
+     :input (lambda ()
+	      (when (t80::btnp 5)
+		(on-restart)))
+     :update (lambda () #t)
+     :render (lambda () (render-game-over-scene)))))
 
 (module game-scene-module 
   (import-as physics physics/)
@@ -775,6 +791,7 @@
   (import enemies)
   (import enemy-waves)
   (import world)
+  (import game-over-scene)
   (define game-time 0)
 
   (define (make-game-scene)
@@ -804,6 +821,8 @@
       (update-camera!)
 
       (set! game-time (+ 1 game-time))
+      (when (<= (cowboy :hp) 0)
+	(push-scene! (make-game-over-scene (lambda () (set-scene! (make-game-scene))))))
       (spawn-enemies entity-store cowboy game-time)
       (for-each update-entity (entity-store))
 
@@ -848,6 +867,7 @@
      :input input
      :update update
      :render render)))
+
 
 (import scene-module)
 (import game-scene-module)
