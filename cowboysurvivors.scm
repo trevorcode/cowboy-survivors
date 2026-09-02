@@ -188,7 +188,16 @@
     (vector-ref (map :map) (+ x (* y (map :width)))))
 
   (define (world->real-coords x y)
-    (cons (* 16 x) (* 16 y)))
+    (cons (* 16 x) (* 16 y))) 
+
+  (define (real-coords->world x y) 
+    (cons 
+     (floor-quotient x 16)
+     (floor-quotient y 16))) 
+
+  (define (random-direction)
+    (let ((dir (* pi (random 2.0)))) 
+      (cons (cos dir) (sin dir)))) 
 
   (define (map-render map-table camera)
     (let* ((game-map (map-table :map))
@@ -380,19 +389,18 @@
 	
 	(t80::spr (e :sprite) (camera-transform (e :x) (e :y)) 15 1 0 0 1 1)))
   
-  (define (make-rat target)
-    (let ((coords (world->real-coords 20 20))) 
-      (hash-table
-       :type :enemy
-       :x (car coords)
-       :y (cdr coords)
-       :radius 4
-       :speed 3
-       :target target
-       :update enemy-follow-player
-       :sprite 64
-       :drop-xp 1
-       :hp 10)))
+  (define (make-rat x y target)
+    (hash-table
+     :type :enemy
+     :x x 
+     :y y 
+     :radius 4
+     :speed 3
+     :target target
+     :update enemy-follow-player
+     :sprite 64
+     :drop-xp 1
+     :hp 10))
 
   (define (damage-enemy! e amount)
     (when (not (e :hit-debounce))
@@ -555,11 +563,11 @@
        :type :upgrade
        :name "Revolver"
        :description "Targets 1 enemy at a time, fires a bullet"
-       :cooldown 60 
-       :max-cooldown 60 
+       :cooldown 120 
+       :max-cooldown 120 
        :range 64 
        :target #f
-       :damage 6 
+       :damage 5 
        :stats '(:max-cooldown :range :damage)
        :update update-revolver
        :render render-revolver))
@@ -631,14 +639,28 @@
     (set! *level-up-menu* (hash-table :options (choose-upgrade-options)
 				      :selected 0)))
 
+  (define (next-option!)
+    (set! (*level-up-menu* :selected) (modulo (+ (*level-up-menu* :selected) 1) (length (*level-up-menu* :options)))))
+
+  (define (prev-option!)
+    (set! (*level-up-menu* :selected) (modulo (- (*level-up-menu* :selected) 1) (length (*level-up-menu* :options)))))
+
+  (define (select-option! cowboy)
+    (apply-gear! cowboy (list-ref (*level-up-menu* :options) (*level-up-menu* :selected)))
+    (set! *level-up-menu* #f))
+
   (define (render-level-up-menu)
-    (t80::rect 30 20 (- screen-width 60) (- screen-height 40) 2)
+    (t80::rect 20 20 (- screen-width 40) (- screen-height 40) 2)
     (for-each
      (lambda (option i)
-       (let ((card-start-x (+ 35 (* i 60)))
-	     (card-start-y 40)
-	     (option (car option)))
-	 (t80::rect card-start-x card-start-y 50 50 3)
+       (let* ((card-height (- screen-height 60))
+	      (card-width (- (/ screen-width 3) 20))
+	      (card-start-y 30)
+	      (card-start-x (+ 25 (* i (+ 5 card-width))))
+	      (option (car option)))
+	 (when (= i (*level-up-menu* :selected))
+	   (t80::rect (- card-start-x 3) (- card-start-y 3) (+ card-width 6) (+ card-height 6) 8))
+	 (t80::rect card-start-x card-start-y card-width card-height 3)
 	 (t80::print (option :name) (+ 2 card-start-x) (+ 2 card-start-y) 0)))
      (*level-up-menu* :options)
      (range (length (*level-up-menu* :options))))))
@@ -717,6 +739,21 @@
 	     :moving? #f)))
       cowboy)))
 
+(module enemy-waves
+  (import world)
+  (import enemies)
+  
+  (define (get-random-position-radius-cowboy cowboy radius)
+    (let* ((dir (random-direction))
+ 	   (new-x (+ (cowboy :x) (* radius (car dir))))
+ 	   (new-y (+ (cowboy :y) (* radius (cdr dir)))))
+      (cons new-x new-y))) 
+
+  (define (spawn-enemies entity-store cowboy t)
+    (when (= 0 (modulo t 120))
+      (let ((coords (get-random-position-radius-cowboy cowboy 128)))
+	(entity-store 'add! (make-rat (car coords) (cdr coords) cowboy))))))
+
 (module game-scene-module 
   (import-as physics physics/)
   (import entity-store)
@@ -724,9 +761,11 @@
   (import gear-catalog)
   (import ui-module)
   (import enemies)
+  (import enemy-waves)
   (import world)
-
+  
   (define (game-scene)
+    (define game-time 0)
     (define entity-store (make-entity-store))
     (define game-map (generate-map 50)) 
     (define get-collisions (physics/collision-system 16))
@@ -734,10 +773,12 @@
 				   (*gear-catalog* :revolver)))
 
     (entity-store 'add! cowboy)
-    (for (i 0 5)
-	 (entity-store 'add! (make-rat cowboy)))
 
     (define (input)
+      (when (get-level-up-menu)
+	(when (t80::btnp 3) (next-option!))
+	(when (t80::btnp 2) (prev-option!))
+	(when (t80::btnp 5) (select-option! cowboy)))
       (when (not (get-level-up-menu))
 	(if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
 	(if (t80::btn 1) (set! (cowboy :y) (+ (* (cowboy :speed) 0.05) (cowboy :y))))
@@ -756,6 +797,8 @@
       (update-camera!)
 
       (when (not (get-level-up-menu))
+	(set! game-time (+ 1 game-time))
+	(spawn-enemies entity-store cowboy game-time)
 	(for-each update-entity (entity-store))
 
 	(for-each
