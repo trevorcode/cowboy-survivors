@@ -92,8 +92,10 @@
 		(loop (cdr lst)))))))
 
   (define (list->random lst)
-    (let ((len (length lst)))
-      (list-ref lst (random len))))
+    (if (null? lst)
+	#f
+	(let ((len (length lst)))
+	  (list-ref lst (random len)))))
 
   (define (all predicate lst)
     (cond
@@ -553,28 +555,29 @@
   
   (define (update-revolver self entity-store)
     (let ((cowboy (self :player)))
-      (set! (self :cooldown) (- (self :cooldown) 1))
-      (when (or (not (self :target))
-		((self :target) :destroy?))
-	(let ((target (find (lambda (e)
-			      (and (eq? (e :type) :enemy)
-				   (within? cowboy e (self :range))))
-			    (entity-store))))
-	  (set! (self :cooldown) (self :max-cooldown))
-	  (set! (self :target) target)))
+      (when (and (self :target) (self :target :destroy?))
+	(set! (self :target) #f))
+      (if (self :target)
+	  (set! (self :cooldown) (- (self :cooldown) 1 ))
+	  (let ((target (list->random (filter (lambda (e)
+						(and (eq? (e :type) :enemy)
+						     (within? cowboy e (self :range))))
+					      (entity-store)))))
+	    (set! (self :target) target)))
       
-      (when (and (self :target)
-		 (<= (self :cooldown) 0))
-	(set! (self :cooldown) (self :max-cooldown))
-	(entity-store 'add! (make-bullet (cowboy :x)
-					 (cowboy :y)
+      (when (and (self :target)  (<= (self :cooldown) 0))
+	(entity-store 'add! (make-bullet (cowboy :x) (cowboy :y)
 					 (direction-to cowboy (self :target))
 					 40
-					 (self :damage))))))
+					 (self :damage)))
+	(set! (self :target) #f)
+	(set! (self :cooldown) (self :max-cooldown)))))
+
   (define (revolver-blueprint)
       (hash-table
        :id :revolver
        :type :upgrade
+       :sprite 260
        :name "Revolver"
        :description "Targets 1 enemy at a time, fires a bullet"
        :cooldown 120 
@@ -647,7 +650,10 @@
       cowboy))
 
   (define (render-level-up-menu selected options)
-    (t80::rect 20 20 (- screen-width 40) (- screen-height 40) 2)
+    (t80::rect 13 13 (- screen-width 26) (- screen-height 26) 0)
+    (t80::rect 15 15 (- screen-width 30) (- screen-height 30) 7)
+    (t80::print "Choose an upgrade" 17 17 0)
+    (t80::print "Choose an upgrade" 18 18 3)
     (for-each
      (lambda (option i)
        (let* ((card-height (- screen-height 60))
@@ -658,7 +664,17 @@
 	 (when (= i selected)
 	   (t80::rect (- card-start-x 3) (- card-start-y 3) (+ card-width 6) (+ card-height 6) 8))
 	 (t80::rect card-start-x card-start-y card-width card-height 3)
-	 (t80::print (option :name) (+ 2 card-start-x) (+ 2 card-start-y) 0)))
+	 (t80::spr (option :sprite) (+ 2 card-start-x) (+ 2 card-start-y) 15 2 0 0 1 1)
+	 (t80::print (option :name) (+ 2 card-start-x) (+ 20 card-start-y) 0)
+	 (for-each
+	  (lambda (stat j)
+	    (let ((display-name (case stat
+				  ((:max-cooldown) "cooldown")
+				  (else (symbol->string (keyword->symbol stat))))))
+	      (t80::print display-name (+ 2 card-start-x) (+ 30 (* j 10) card-start-y) 0 #t 1 #t)
+	      (t80::print (number->string (option stat)) (+ 42 card-start-x) (+ 30 (* j 10) card-start-y) 0)))
+	  (option :stats)
+	  (range (length (option :stats))))))
      options
      (range (length options))))
 
@@ -913,6 +929,7 @@
 ;; 001:ffffffffff888ffff8f8f8ff8ff8ff8f8888888f8ff8ff8ff8f8f8ffff888fff
 ;; 002:ffffffffff1111fff122221ff122221ff122221ff122221fff1111ffffffffff
 ;; 003:fffeefffffeddefffed4ddefffeddefffeddddefffeddefffffeefffffffffff
+;; 004:f222ffff321121121211211172223fff77733fff777fffff77ffffff77ffffff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
 ;; </SPRITES>
