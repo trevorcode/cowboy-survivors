@@ -135,6 +135,20 @@
 	(* 4 p p p)
 	(+ 1 (/ (* (- (* 2 p) 2) (- (* (- (* 2 p) 2)) (- (* 2 p) 2)) (- (* 2 p) 2)) 2)))))
 
+(module scene-module
+  (define *scenes* (list))
+  (define (push-scene! scene) (set! *scenes* (cons scene *scenes*))) 
+  (define (pop-scene!) (set! *scenes* (cdr *scenes*))) 
+  (define (replace-scene! scene) (set! *scenes* (cons scene (cdr *scenes*)))) 
+  (define (current-scene) (car *scenes*))
+
+  (define (run-scenes!)
+    (when (pair? *scenes*)
+      (let ((top (current-scene)))
+	((top :input))
+	((top :update))
+	(for-each (lambda (s) ((s :render))) (reverse *scenes*))))))
+
 (module camera
   (import utility)
   (define *camera*
@@ -611,13 +625,9 @@
       ((:projectile)
        ((e :update) e)))))
 
-(module gear-catalog
+(module level-up-scene
+  (import scene-module)
   (import revolver)
-  (import utility)
-  (define *level-up-menu* #f)
-
-  (define (get-level-up-menu)
-    *level-up-menu*)
 
   (define *gear-catalog*
     (hash-table
@@ -635,21 +645,7 @@
       (set! (cowboy :upgrades) (cons new-upgrade (cowboy :upgrades)))
       cowboy))
 
-  (define (open-level-up-menu!)
-    (set! *level-up-menu* (hash-table :options (choose-upgrade-options)
-				      :selected 0)))
-
-  (define (next-option!)
-    (set! (*level-up-menu* :selected) (modulo (+ (*level-up-menu* :selected) 1) (length (*level-up-menu* :options)))))
-
-  (define (prev-option!)
-    (set! (*level-up-menu* :selected) (modulo (- (*level-up-menu* :selected) 1) (length (*level-up-menu* :options)))))
-
-  (define (select-option! cowboy)
-    (apply-gear! cowboy (list-ref (*level-up-menu* :options) (*level-up-menu* :selected)))
-    (set! *level-up-menu* #f))
-
-  (define (render-level-up-menu)
+  (define (render-level-up-menu selected options)
     (t80::rect 20 20 (- screen-width 40) (- screen-height 40) 2)
     (for-each
      (lambda (option i)
@@ -658,16 +654,31 @@
 	      (card-start-y 30)
 	      (card-start-x (+ 25 (* i (+ 5 card-width))))
 	      (option (car option)))
-	 (when (= i (*level-up-menu* :selected))
+	 (when (= i selected)
 	   (t80::rect (- card-start-x 3) (- card-start-y 3) (+ card-width 6) (+ card-height 6) 8))
 	 (t80::rect card-start-x card-start-y card-width card-height 3)
 	 (t80::print (option :name) (+ 2 card-start-x) (+ 2 card-start-y) 0)))
-     (*level-up-menu* :options)
-     (range (length (*level-up-menu* :options))))))
+     options
+     (range (length options))))
+
+  (define (make-level-up-scene cowboy)
+    (define options (choose-upgrade-options))
+    (define selected 0)
+
+    (hash-table
+     :input (lambda ()
+		  (when (t80::btnp 3) (set! selected (modulo (+ selected 1) (length options))))
+		  (when (t80::btnp 2) (set! selected (modulo (- selected 1) (length options))))
+		  (when (t80::btnp 5)
+		    (apply-gear! cowboy (list-ref options selected))
+		    (pop-scene!)))
+     :update (lambda () #t)
+     :render (lambda () (render-level-up-menu selected options)))))
 
 (module cowboy-module
   (import camera)
-  (import gear-catalog)
+  (import scene-module)
+  (import level-up-scene)
   (import-as physics physics/) 
   
   (define-constant cowboy-sprite 256)
@@ -706,7 +717,7 @@
   (define (level-up! cowboy)
     (set! (cowboy :level) (+ 1 (cowboy :level)))
     (set! (cowboy :xp) 0)
-    (open-level-up-menu!))
+    (push-scene! (make-level-up-scene cowboy)))
 
   (define (collect-xp! cowboy amount)
     (set! (cowboy :xp) (+ amount (cowboy :xp)))
@@ -729,7 +740,7 @@
 	     :type :player
 	     :x (car coords)
 	     :y (cdr coords)
-	     :radius 8
+	     :radius 6
 	     :speed 10
 	     :level 1
 	     :xp 0
@@ -754,18 +765,19 @@
       (let ((coords (get-random-position-radius-cowboy cowboy 128)))
 	(entity-store 'add! (make-rat (car coords) (cdr coords) cowboy))))))
 
+
 (module game-scene-module 
   (import-as physics physics/)
   (import entity-store)
   (import cowboy-module)
-  (import gear-catalog)
+  (import level-up-scene)
   (import ui-module)
   (import enemies)
   (import enemy-waves)
   (import world)
-  
-  (define (game-scene)
-    (define game-time 0)
+  (define game-time 0)
+
+  (define (make-game-scene)
     (define entity-store (make-entity-store))
     (define game-map (generate-map 50)) 
     (define get-collisions (physics/collision-system 16))
@@ -775,20 +787,15 @@
     (entity-store 'add! cowboy)
 
     (define (input)
-      (when (get-level-up-menu)
-	(when (t80::btnp 3) (next-option!))
-	(when (t80::btnp 2) (prev-option!))
-	(when (t80::btnp 5) (select-option! cowboy)))
-      (when (not (get-level-up-menu))
-	(if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
-	(if (t80::btn 1) (set! (cowboy :y) (+ (* (cowboy :speed) 0.05) (cowboy :y))))
-	(if (t80::btn 2) (set! (cowboy :x) (- (cowboy :x) (* (cowboy :speed) 0.05))))
-	(if (t80::btn 0) (set! (cowboy :y) (- (cowboy :y) (* (cowboy :speed) 0.05))))
-	
-	(if (or (t80::btn 0) (t80::btn 1)
-		(t80::btn 2) (t80::btn 3))
-	    (set! (cowboy :moving?) #t)
-	    (set! (cowboy :moving?) #f))))
+      (if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
+      (if (t80::btn 1) (set! (cowboy :y) (+ (* (cowboy :speed) 0.05) (cowboy :y))))
+      (if (t80::btn 2) (set! (cowboy :x) (- (cowboy :x) (* (cowboy :speed) 0.05))))
+      (if (t80::btn 0) (set! (cowboy :y) (- (cowboy :y) (* (cowboy :speed) 0.05))))
+      
+      (if (or (t80::btn 0) (t80::btn 1)
+	      (t80::btn 2) (t80::btn 3))
+	  (set! (cowboy :moving?) #t)
+	  (set! (cowboy :moving?) #f)))
 
     (define (update)
       (entity-store 'remove-destroyed!)
@@ -796,25 +803,24 @@
       (hash-table-set! *camera* :target-y (cowboy :y))
       (update-camera!)
 
-      (when (not (get-level-up-menu))
-	(set! game-time (+ 1 game-time))
-	(spawn-enemies entity-store cowboy game-time)
-	(for-each update-entity (entity-store))
+      (set! game-time (+ 1 game-time))
+      (spawn-enemies entity-store cowboy game-time)
+      (for-each update-entity (entity-store))
 
-	(for-each
-	 (lambda (upgrade)
-	   ((upgrade :update) upgrade entity-store))
-	 (cowboy :upgrades))
+      (for-each
+       (lambda (upgrade)
+	 ((upgrade :update) upgrade entity-store))
+       (cowboy :upgrades))
 
-	(define collisions (get-collisions (entity-store)))
-	(for-each dispatch-collision! collisions))
+      (define collisions (get-collisions (entity-store)))
+      (for-each dispatch-collision! collisions)
 
       (process-events
        (lambda (event)
 	 (case (car event)
 	   ((spawn-xp) (entity-store 'add! (make-xp-orb (cadr event) (caddr event))))))))
 
-    (define (render cowboy)
+    (define (render)
       (t80::cls 0)
       (map-render game-map *camera*)
       (render-cowboy cowboy)
@@ -836,23 +842,21 @@
      
 
       (render-hp (cowboy :hp))
-      (render-xp (cowboy :xp) (xp-needed (cowboy :level)))
-      (when (get-level-up-menu)
-	(render-level-up-menu))
-      )
+      (render-xp (cowboy :xp) (xp-needed (cowboy :level))))
 
-    (lambda ()
-      (input)
-      (update)
-      (render cowboy))))
+    (hash-table
+     :input input
+     :update update
+     :render render)))
 
+(import scene-module)
 (import game-scene-module)
+(push-scene! (make-game-scene))
 (define t 0)
-(define scene (game-scene))
 
 (define (TIC)
   (co/pump-coroutines!)
-  (scene)
+  (run-scenes!)
   
   (inc! t 1))
 
