@@ -389,9 +389,7 @@
        (else #f)))))
 
 (module enemies 
-
   (import physics)
-
        
   (define (enemy-follow-player e)
     (let* ((dir (direction-to e (e :target)))
@@ -400,27 +398,96 @@
       (set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
       (set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
   
+
   (define (render-entity e)
+    (define (sprite-frame e)
+      (let ((sprite (e :sprite)))
+	(if (pair? sprite)
+	    (list-ref sprite (modulo (quotient (e :time) 10) (length sprite)))
+	    sprite)))
+
+    (define (draw-sprite e frame)
+      (if (pair? frame)
+	  (t80::spr (car frame) (camera-transform (e :x) (e :y)) 15 (or (e :scale) 1) 0 0 (cadr frame) (caddr frame))
+	  (t80::spr frame (camera-transform (e :x) (e :y)) 15 (or (e :scale) 1) 0 0 1 1)))
+
+
     (if (e :white-flash?)
 	(begin 
 	  (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) 4))
-	  (t80::spr (e :sprite) (camera-transform (e :x) (e :y)) 15 1 0 0 1 1)
+	  (draw-sprite e (sprite-frame e))
 	  (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
 	
-	(t80::spr (e :sprite) (camera-transform (e :x) (e :y)) 15 1 0 0 1 1)))
+	(draw-sprite e (sprite-frame e))))
   
-  (define (make-rat x y target)
+  (define (make-tumbleweed x y target)
     (hash-table
      :type :enemy
      :x x 
      :y y 
      :radius 4
      :speed 2
+     :time 0
      :target target
      :update enemy-follow-player
-     :sprite 64
+     :sprite '(304 305)
      :drop-xp 1
      :hp 10))
+
+  (define (make-big-tumbleweed x y target)
+    (hash-table
+     :type :enemy
+     :x x 
+     :y y 
+     :radius 8
+     :speed 1
+     :time 0
+     :target target
+     :update enemy-follow-player
+     :scale 2
+     :sprite '(304 305)
+     :drop-xp 1
+     :hp 20))
+
+  (define (scarab-queen-update e)
+    (if (not (within? (e :target) e 80))
+      (let* ((dir (direction-to e (e :target)))
+	     (dir-x (car dir))
+	     (dir-y (cdr dir)))
+	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
+	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10)))))
+      (when (= 0 (modulo (e :time) 50))
+	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target))))))
+
+  (define (make-scarab-queen x y target)
+    (hash-table
+     :type :enemy
+     :x x 
+     :y y 
+     :radius 8
+     :speed 2
+     :time 0
+     :target target
+     :update scarab-queen-update
+     :scale 1
+     :sprite '((320 2 2) (322 2 2))
+     :drop-xp 4
+     :hp 20))
+
+  (define (make-scarab x y target)
+    (hash-table
+     :type :enemy
+     :x x 
+     :y y 
+     :radius 4
+     :speed 4
+     :time 0
+     :target target
+     :update enemy-follow-player
+     :scale 1
+     :sprite 306 
+     :drop-xp 1
+     :hp 5))
 
   (define (damage-enemy! e amount)
     (when (not (e :hit-debounce))
@@ -511,6 +578,10 @@
 	(set! (e :duration) (- (e :duration) 1))
 	(when (<= (e :duration) 0)
 	  (set! (e :destroy?) #t))))
+
+  (define (update-time e)
+    (when (e :time)
+      (set! (e :time) (+ (e :time) 1))))
 
   (define (update-direction e)
     (when (e :direction)
@@ -649,6 +720,7 @@
   (define (update-entity e)
     (eh/update-duration e)
     (eh/update-direction e)
+    (eh/update-time e)
     
     (case (e :type)
       ((:enemy)
@@ -826,8 +898,29 @@
 
 (module enemy-waves
   (import world)
-  (import enemies)
-  
+  (import enemies) 
+  (define enemy-types
+    (list
+     (hash-table :id :tumbleweed :cost 1 :min-time 0 :make make-tumbleweed)
+     (hash-table :id :big-tumbleweed :cost 2 :min-time 30 :make make-big-tumbleweed)
+     (hash-table :id :scarab-queen :cost 6 :min-time 60 :make make-scarab-queen))) 
+
+  (define (available-enemies elapsed)
+    (filter (lambda (e) (<= (e :min-time) elapsed)) enemy-types)) 
+
+  (define (current-budget elapsed-seconds)
+    (+ 3 (* 0.10 elapsed-seconds))) 
+
+  (define (spend-budget budget elapsed)
+    (let ((pool (available-enemies elapsed)))
+      (let loop ((remaining budget)
+		 (picks '()))
+	(let ((affordable (filter (lambda (e) (<= (e :cost) remaining)) pool)))
+	  (if (null? affordable)
+	      picks
+	      (let ((choice (list->random affordable)))
+		(loop (- remaining (choice :cost)) (cons choice picks)))))))) 
+
   (define (get-random-position-radius-cowboy cowboy radius)
     (let* ((dir (random-direction))
  	   (new-x (+ (cowboy :x) (* radius (car dir))))
@@ -835,9 +928,12 @@
       (cons new-x new-y))) 
 
   (define (spawn-enemies entity-store cowboy t)
-    (when (= 0 (modulo t 120))
-      (let ((coords (get-random-position-radius-cowboy cowboy 128)))
-	(entity-store 'add! (make-rat (car coords) (cdr coords) cowboy))))))
+    (let ((seconds (/ t 60)))
+      (when (= 0 (modulo seconds 10))
+	(for-each (lambda (enemy)
+		    (let ((coords (get-random-position-radius-cowboy cowboy 128)))
+		      (entity-store 'add! ((enemy :make) (car coords) (cdr coords) cowboy))))
+		  (spend-budget (current-budget seconds) seconds))))))
 
 (module game-over-scene
   (import scene-module)
@@ -913,7 +1009,8 @@
       (process-events
        (lambda (event)
 	 (case (car event)
-	   ((spawn-xp) (entity-store 'add! (make-xp-orb (cadr event) (caddr event))))))))
+	   ((spawn-xp) (entity-store 'add! (make-xp-orb (cadr event) (caddr event))))
+	   ((spawn-scarab) (entity-store 'add! (make-scarab (cadr event) (caddr event) (cadddr event))))))))
 
     (define (render)
       (t80::cls 0)
@@ -977,12 +1074,8 @@
 ;; 051:7700777077707770770077007000700770007007700070070000000700000000
 ;; 064:fffff111fff11000ff100000f1000011f1001100100010001001000110010010
 ;; 065:111fffff00011fff000001ff1100001f0011001f000010011100010100100101
-;; 066:ffffffff11111fff0100111f1000001100000000000010000000110000000100
-;; 067:ffffffffffffffffffffffff1fffffff11ffffff01ffffff011fffff00011111
 ;; 080:100100101001000110001000f1000100f1000011ff100000fff11000fffff111
 ;; 081:0001010110010101000100010010001f1100001f000001ff00011fff111fffff
-;; 082:11111000000000000011000000111100001ff11111ffffffffffffffffffffff
-;; 083:000000110000011f000001ff00011fff1111ffffffffffffffffffffffffffff
 ;; </TILES>
 
 ;; <SPRITES>
@@ -994,6 +1087,17 @@
 ;; 005:8fff8fff88ff88fff88ff88fff88ff88ff88ff88f88ff88f88ff88ff8fff8fff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
+;; 048:fff775fff777757ff755f7577777177717f11f7751551f7f555f11fff777777f
+;; 049:f777777fff11f555f7f1551577f11f7177717777757f557ff757777fff577fff
+;; 050:ffffffffff3333fff377773f3077773f3077773ff377773fff3333ffffffffff
+;; 064:ff000ffffffff0fffffff333ffff3777fff33777fff37777f337777733077777
+;; 065:ff00ffff33ffffff333fffff7333000f77733fff77733fff77773fff77773fff
+;; 066:fffff00ffffff0fffffff333ffff3777fff33777fff37777f337777733077777
+;; 067:f0fff00f33fff0ff333f0fff73330fff77733fff77733fff77773fff77773fff
+;; 080:33077777f3377777fff33777fff33777ffff3773fff03333f00fffff00fffff0
+;; 081:77773fff77773fff77733fff7773ffff333000ffffff00000fffffff0fffffff
+;; 082:33077777f3377777fff33777fff33777ffff3773fff03333ffff0fffffff0ff0
+;; 083:77773fff77773fff77733fff7773ffff330fffffff0fffff0f0fffff0f0fffff
 ;; </SPRITES>
 
 ;; <WAVES>
