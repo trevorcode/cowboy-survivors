@@ -489,16 +489,19 @@
      :drop-xp 1
      :hp 5))
 
+
   (define (damage-enemy! e amount)
-    (when (not (e :hit-debounce))
-      (set! (e :hp) (- (e :hp) amount))
-      (set! (e :hit-debounce) #t)
-      (set! (e :white-flash?) #t)
-      (co/spawn!
-       (lambda (yield) 
-	 (for (i 0 6) (yield))
-	 (set! (e :white-flash?) #f)
-	 (set! (e :hit-debounce) #f)))))
+    (if (e :hit-debounce)
+	#f
+	(begin 
+	  (set! (e :hp) (- (e :hp) amount))
+	  (set! (e :hit-debounce) #t)
+	  (set! (e :white-flash?) #t)
+	  (co/spawn!
+	   (lambda (yield) 
+	     (for (i 0 6) (yield))
+	     (set! (e :white-flash?) #f)
+	     (set! (e :hit-debounce) #f))))))
 
   (on-collision!
    :enemy :enemy
@@ -508,8 +511,8 @@
   (on-collision!
    :projectile :enemy
    (lambda (a b)
-     (damage-enemy! b (a :damage))
-     (set! (a :destroy?) #t)))
+     (when (damage-enemy! b (a :damage))
+       (set! (a :destroy?) #t))))
 
   (define (make-xp-orb x y)
     (hash-table
@@ -844,7 +847,7 @@
 	(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))))
 
   (define (xp-needed level)
-    (* level 5))
+    (+ 3 (* level 3)))
 
   (define (level-up! cowboy)
     (set! (cowboy :level) (+ 1 (cowboy :level)))
@@ -935,6 +938,70 @@
 		      (entity-store 'add! ((enemy :make) (car coords) (cdr coords) cowboy))))
 		  (spend-budget (current-budget seconds) seconds))))))
 
+(module pause-menu
+  (import scene-module)
+
+  (define (render-upgrade upgrade selected x y)
+    (let ((upgrade-width 16)
+	  (upgrade-height 16))
+      (if selected
+	  (t80::rect (- x 2) (- y 2) (+ 4 upgrade-width) (+ 4 upgrade-height) 14)
+	  (t80::rect (- x 1) (- y 1) (+ 2 upgrade-width) (+ 2 upgrade-height) 0))
+      (t80::rect x y upgrade-width upgrade-height 4)
+      (t80::spr (upgrade :sprite) x y 15 2 0 0 1 1)))
+
+  (define (render-upgrade-list start-x start-y upgrades selected)
+    (for-each
+     (lambda (upgrade i)
+       (let* ((row-width 6)
+	      (tile-y (quotient i row-width))
+	      (tile-x (modulo i row-width))
+	      (x (+ start-x (* tile-x 19)))
+	      (y (+ start-y (* tile-y 19)))
+	      (selected? (= i selected)))
+	 (render-upgrade upgrade selected? x y)))
+     upgrades
+     (range (length upgrades))))
+
+  (define (render-upgrade-info start-x start-y upgrade)
+    (t80::rect start-x 15 (- screen-width start-x 17) (- screen-height 30) 0) 
+    (t80::rect (+ 2 start-x) 15 (- screen-width start-x 17) (- screen-height 30) 4) 
+    (t80::spr (upgrade :sprite) (+ 2 start-x) (+ 2 15) 15 2 0 0 1 1)
+    (t80::print (upgrade :name) (+ 2 start-x) (+ 20 15) 0)
+    (when (upgrade :stats)
+      (for-each
+       (lambda (stat j)
+	 (let ((display-name (case stat
+			       ((:max-cooldown) "cooldown")
+			       (else (symbol->string (keyword->symbol stat))))))
+	   (t80::print display-name (+ 2 start-x) (+ 30 (* j 10) start-y) 0 #t 1 #t)
+	   (t80::print (object->string (upgrade stat)) (+ 42 start-x) (+ 30 (* j 10) start-y) 0)))
+       (upgrade :stats)
+       (range (length (upgrade :stats)))))
+
+    )
+
+  (define (render-pause-menu upgrades selected)
+    (t80::rect 13 13 (- screen-width 26) (- screen-height 26) 0)
+    (t80::rect 15 15 (- screen-width 30) (- screen-height 30) 7)
+    (t80::print "Pause" 17 17 0)
+    (t80::print "Pause" 18 18 3)
+    (render-upgrade-info 130 15 (list-ref upgrades selected))
+    (render-upgrade-list 17 26 upgrades selected))
+
+  (define (make-pause-menu upgrades)
+    (define selected 0)
+    (define upgrades upgrades)
+    
+    (hash-table
+     :input (lambda ()
+	      (when (t80::btnp 3) (set! selected (modulo (+ selected 1) (length upgrades))))
+	      (when (t80::btnp 2) (set! selected (modulo (- selected 1) (length upgrades))))
+	      (when (t80::btnp 5)
+		(pop-scene!)))
+     :update (lambda () #t)
+     :render (lambda () (render-pause-menu upgrades selected)))))
+
 (module game-over-scene
   (import scene-module)
 
@@ -961,6 +1028,8 @@
   (import enemy-waves)
   (import world)
   (import game-over-scene)
+  (import pause-menu)
+
   (define game-time 0)
 
   (define (make-game-scene)
@@ -977,6 +1046,8 @@
       (if (t80::btn 1) (move-cowboy-y! game-map cowboy #t))
       (if (t80::btn 2) (move-cowboy-x! game-map cowboy #f))
       (if (t80::btn 0) (move-cowboy-y! game-map cowboy #f))
+
+      (when (t80::btn 4) (push-scene! (make-pause-menu (cowboy :upgrades))))
       
       (if (or (t80::btn 0) (t80::btn 1)
 	      (t80::btn 2) (t80::btn 3))
