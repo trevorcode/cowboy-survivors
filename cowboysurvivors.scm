@@ -181,7 +181,7 @@
   (define (generate-map width)
     (let ((game-map (make-vector (* width width) 'empty))
 	  (center (/ (- width 1) 2.0))
-	  (radius (/ width 2.0)))
+	  (radius (- (/ width 2.0) 2)))
       (let loop ((i 0))
 	(when (< i (* width width))
 	  (let* ((x (modulo i width))
@@ -219,46 +219,50 @@
     (let* ((game-map (map-table :map))
 	   (map-width (map-table :width))
 	   (map-height (map-table :height))
-	   (cam-x (round (*camera* :x)))
-	   (cam-y (round (*camera* :y)))
-	   (cam-tile-x (floor-quotient cam-x 16))
-           (cam-tile-y (floor-quotient cam-y 16))
-	   (sub-x (modulo cam-x 16))
-           (sub-y (modulo cam-y 16))
-	   (screen-tile-width 18)
-	   (screen-tile-height 12))
+	   (margin 1)
+	   (cam-tile-x (- (floor-quotient (round (*camera* :x)) 16) (floor-quotient (round (*camera* :cx)) 16) margin))
+	   (cam-tile-y (- (floor-quotient (round (*camera* :y)) 16) (floor-quotient (round (*camera* :cy)) 16) margin))
+	   (span-x 18)
+	   (span-y 12))
 
       (define (in-bounds? x y)
 	(and (<= 0 x) (< x map-width)
 	     (<= 0 y) (< y map-height)))
 
       (let loop ((i 0))
-	(when (< i (* screen-tile-width screen-tile-height))
-	  (let* ((screen-x (modulo i screen-tile-width)) 
-		 (screen-y (quotient i screen-tile-width))
+	(when (< i (* span-x span-y))
+	  (let* ((screen-x (modulo i span-x)) 
+		 (screen-y (quotient i span-x))
 		 (world-x (+ cam-tile-x screen-x)) 
 		 (world-y (+ cam-tile-y screen-y)))
-	    (when (and (in-bounds? world-x world-y)
-		       (not (eq? (map-get-cell map-table world-x world-y) 'empty)))
-	      (t80::spr (map-get-cell map-table world-x world-y) (- (* 16 screen-x) sub-x) (- (* 16 screen-y) sub-y) -1 1 0 0 2 2))
+	    (when (and (in-bounds? world-x world-y))
+	      (call-with-values 
+		(lambda () (camera-transform (* 16 world-x) (* 16 world-y)))
+		(lambda (sx sy)
+		  (if (eq? (map-get-cell map-table world-x world-y) 'empty)
+		      (t80::rect sx sy 16 16 6)
+		      (t80::spr (map-get-cell map-table world-x world-y) sx sy -1 1 0 0 2 2)))))
 	    (loop (+ i 1)))))
 
       (let loop ((i 0))
-	(when (< i (* screen-tile-width screen-tile-height))
-	  (let* ((screen-x (- (modulo i screen-tile-width) 1)) 
-		 (screen-y (- (quotient i screen-tile-width) 1))
+	(when (< i (* span-x span-y))
+	  (let* ((screen-x (- (modulo i span-x) 1)) 
+		 (screen-y (- (quotient i span-x) 1))
 		 (world-x (+ cam-tile-x screen-x)) 
 		 (world-y (+ cam-tile-y screen-y)))
 	    (when (or (not (in-bounds? world-x world-y))
 		      (eq? (map-get-cell map-table world-x world-y) 'empty))
-	      (for-each
-	       (lambda (offset)
-		 (t80::spr 64
-			   (+ (car offset) (- (* 16 screen-x) sub-x))
-			   (+ (cadr offset) (- (* 16 screen-y) sub-y))
-			   15 1 0 (caddr offset) 2 2))
-	       '((-4 -4 0)
-		 (4 4 0))))
+	      (call-with-values 
+		(lambda () (camera-transform (* 16 world-x) (* 16 world-y)))
+		(lambda (sx sy)
+		  (for-each
+		   (lambda (offset)
+		     (t80::spr 64
+			       (+ (car offset) sx)
+			       (+ (cadr offset) sy)
+			       15 1 0 (caddr offset) 2 2))
+		   '((-4 -4 0)
+		     (4 4 0))))))
 	    (loop (+ i 1)))))
       )))
 
@@ -411,7 +415,7 @@
      :x x 
      :y y 
      :radius 4
-     :speed 3
+     :speed 2
      :target target
      :update enemy-follow-player
      :sprite 64
@@ -456,7 +460,7 @@
       (t80::spr 272 (* i 9) 0 15 1 0 0 1 1)))
 
   (define (render-xp xp xp-needed)
-    (t80::rect 0 0 (floor (* screen-width (/ xp xp-needed))) 4 9))
+    (t80::rect 0 (- screen-height 4) (floor (* screen-width (/ xp xp-needed))) 4 13))
 
   (define* (shake-effect! intensity (duration 20))
     (co/spawn! 
@@ -541,6 +545,34 @@
 		:damage damage
 		:update update-bullet
 		:render render-bullet)))
+
+(module speed-item 
+  (define (speed-blueprint)
+    (hash-table
+     :id :speed-item
+     :type :upgrade
+     :sprite 261
+     :name "Speed"
+     :description "Gives extra speed"))
+
+  (define (make-speed-item cowboy)
+    (let ((new-speed (speed-blueprint)))
+      (set! (cowboy :speed) (+ 2 (cowboy :speed)))
+      new-speed)))
+
+(module extra-heart 
+  (define (heart-blueprint)
+      (hash-table
+       :id :heart
+       :type :upgrade
+       :sprite 272
+       :name "Heart"
+       :description "Gives 1 extra life"))
+
+  (define (make-extra-heart cowboy)
+    (let ((new-heart (heart-blueprint)))
+      (set! (cowboy :hp) (+ 1 (cowboy :hp)))
+      new-heart)))
 
 (module revolver 
   (import projectile)
@@ -632,17 +664,27 @@
 (module level-up-scene
   (import scene-module)
   (import revolver)
+  (import extra-heart)
+  (import speed-item)
 
   (define *gear-catalog*
     (hash-table
-     :revolver (cons (revolver-blueprint) make-revolver))) 
+     :revolver (cons (revolver-blueprint) make-revolver)
+     :heart (cons (heart-blueprint) make-extra-heart)
+     :speed-item (cons (speed-blueprint) make-speed-item)
+     )) 
+
+  (define (randomize-list lst)
+    (map cdr
+	 (sort! (map (lambda (x) (cons (random (length lst)) x)) lst)
+		(lambda (a b) (< (car a) (car b)))))) 
 
   (define (choose-upgrade-options)
-    (define gear-catalog-list (map values *gear-catalog*)) 
+    (define gear-catalog-list (randomize-list (map values *gear-catalog*))) 
     (list 
-     (cdr (list->random gear-catalog-list))
-     (cdr (list->random gear-catalog-list))
-     (cdr (list->random gear-catalog-list))))
+     (cdr (car gear-catalog-list))
+     (cdr (cadr gear-catalog-list))
+     (cdr (caddr gear-catalog-list))))
 
   (define (apply-gear! cowboy upgrade)
     (let* ((new-upgrade ((cdr upgrade) cowboy)))
@@ -666,15 +708,16 @@
 	 (t80::rect card-start-x card-start-y card-width card-height 3)
 	 (t80::spr (option :sprite) (+ 2 card-start-x) (+ 2 card-start-y) 15 2 0 0 1 1)
 	 (t80::print (option :name) (+ 2 card-start-x) (+ 20 card-start-y) 0)
-	 (for-each
-	  (lambda (stat j)
-	    (let ((display-name (case stat
-				  ((:max-cooldown) "cooldown")
-				  (else (symbol->string (keyword->symbol stat))))))
-	      (t80::print display-name (+ 2 card-start-x) (+ 30 (* j 10) card-start-y) 0 #t 1 #t)
-	      (t80::print (number->string (option stat)) (+ 42 card-start-x) (+ 30 (* j 10) card-start-y) 0)))
-	  (option :stats)
-	  (range (length (option :stats))))))
+	 (when (option :stats)
+	   (for-each
+	    (lambda (stat j)
+	      (let ((display-name (case stat
+				    ((:max-cooldown) "cooldown")
+				    (else (symbol->string (keyword->symbol stat))))))
+		(t80::print display-name (+ 2 card-start-x) (+ 30 (* j 10) card-start-y) 0 #t 1 #t)
+		(t80::print (object->string (option stat)) (+ 42 card-start-x) (+ 30 (* j 10) card-start-y) 0)))
+	    (option :stats)
+	    (range (length (option :stats)))))))
      options
      (range (length options))))
 
@@ -749,6 +792,20 @@
   (physics/on-collision! :player :enemy
 		 (lambda (a b)
 		   (damage-cowboy! a 1)))
+
+  (define (move-cowboy-x! map cowboy pos?)
+    (let* ((new-x ((if pos? + -) (cowboy :x) (* (cowboy :speed) 0.05)))
+	   (world-coords (real-coords->world (round new-x) (round (cowboy :y))))
+	   (tile (map-get-cell map (car world-coords) (cdr world-coords))))
+      (when (not (eq? tile 'empty))
+	(set! (cowboy :x) new-x))))
+
+  (define (move-cowboy-y! map cowboy pos?)
+    (let* ((new-y ((if pos? + -) (cowboy :y) (* (cowboy :speed) 0.05)))
+	   (world-coords (real-coords->world (round (cowboy :x)) (round new-y)))
+	   (tile (map-get-cell map (car world-coords) (cdr world-coords))))
+      (when (not (eq? tile 'empty))
+	(set! (cowboy :y) new-y))))
   
   (define (make-cowboy world-x world-y)
     (let* ((coords (world->real-coords world-x world-y))
@@ -820,10 +877,10 @@
     (entity-store 'add! cowboy)
 
     (define (input)
-      (if (t80::btn 3) (set! (cowboy :x) (+ (* (cowboy :speed) 0.05) (cowboy :x))))
-      (if (t80::btn 1) (set! (cowboy :y) (+ (* (cowboy :speed) 0.05) (cowboy :y))))
-      (if (t80::btn 2) (set! (cowboy :x) (- (cowboy :x) (* (cowboy :speed) 0.05))))
-      (if (t80::btn 0) (set! (cowboy :y) (- (cowboy :y) (* (cowboy :speed) 0.05))))
+      (if (t80::btn 3) (move-cowboy-x! game-map cowboy #t))
+      (if (t80::btn 1) (move-cowboy-y! game-map cowboy #t))
+      (if (t80::btn 2) (move-cowboy-x! game-map cowboy #f))
+      (if (t80::btn 0) (move-cowboy-y! game-map cowboy #f))
       
       (if (or (t80::btn 0) (t80::btn 1)
 	      (t80::btn 2) (t80::btn 3))
@@ -831,6 +888,8 @@
 	  (set! (cowboy :moving?) #f)))
 
     (define (update)
+      (when (< game-time 5)
+	(level-up! cowboy))
       (entity-store 'remove-destroyed!)
       (hash-table-set! *camera* :target-x (cowboy :x))
       (hash-table-set! *camera* :target-y (cowboy :y))
@@ -844,7 +903,8 @@
 
       (for-each
        (lambda (upgrade)
-	 ((upgrade :update) upgrade entity-store))
+	 (when (upgrade :update)
+	   ((upgrade :update) upgrade entity-store)))
        (cowboy :upgrades))
 
       (define collisions (get-collisions (entity-store)))
@@ -872,7 +932,8 @@
 
       (for-each
        (lambda (upgrade)
-	 ((upgrade :render) upgrade))
+	 (when (upgrade :render)
+	   ((upgrade :render) upgrade)))
        (cowboy :upgrades))
      
 
@@ -930,6 +991,7 @@
 ;; 002:ffffffffff1111fff122221ff122221ff122221ff122221fff1111ffffffffff
 ;; 003:fffeefffffeddefffed4ddefffeddefffeddddefffeddefffffeefffffffffff
 ;; 004:f222ffff321121121211211172223fff77733fff777fffff77ffffff77ffffff
+;; 005:8fff8fff88ff88fff88ff88fff88ff88ff88ff88f88ff88f88ff88ff8fff8fff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
 ;; </SPRITES>
