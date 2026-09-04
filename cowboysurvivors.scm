@@ -24,14 +24,15 @@
 
 (define-macro (for args . body)
   (let ((loop (gensym))
+	(limit (gensym))
 	(binding (car args))
 	(from (cadr args))
 	(to (caddr args)))
-    `(let ,loop ((,binding ,from))
-       (when (< ,binding ,to)
-	 ,@body
-	 (,loop (+ ,binding 1))))))
-
+    `(let ((,limit ,to))
+       (let ,loop ((,binding ,from))
+	    (when (< ,binding ,limit)
+	      ,@body
+	      (,loop (+ ,binding 1)))))))
 
 (define-constant screen-width 240)
 (define-constant screen-height 136)
@@ -334,13 +335,16 @@
       (let ((collisions (list)))
 	(for-each
 	 (lambda (grid-entry)
-	   (let ((cx (car (car grid-entry)))
-		 (cy (cdr (car grid-entry)))
-		 (entities (cdr grid-entry)))
-	     (for (i 0 (length entities))
-		  (for (j (+ i 1) (length entities))
-		       (when (overlapping? (entities i) (entities j))
-			 (set! collisions (cons (cons (entities i) (entities j)) collisions)))))
+	   (let* ((cx (car (car grid-entry)))
+		  (cy (cdr (car grid-entry)))
+		  (entities (cdr grid-entry))
+		  (entity-count (length entities)))
+	     (for (i 0 entity-count)
+		  (for (j (+ i 1) entity-count)
+		       (let ((a (entities i))
+			     (b (entities j)))
+			 (when (overlapping? a b)
+			   (set! collisions (cons (cons a b) collisions))))))
 
 	     (for-each
               (lambda (offset)
@@ -479,7 +483,9 @@
 	     (dir-y (cdr dir)))
 	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
 	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10)))))
-      (when (= 0 (modulo (e :time) 60))
+      (when (= 0 (modulo (e :time) 240))
+	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target)))
+	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target)))
 	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target))))))
 
   (define (make-scarab-queen x y target)
@@ -495,7 +501,7 @@
      :scale 1
      :sprite '((320 2 2) (322 2 2))
      :drop-xp 4
-     :hp 20))
+     :hp 15))
 
   (define (make-scarab x y target)
     (hash-table
@@ -509,8 +515,7 @@
      :update enemy-follow-player
      :scale 1
      :sprite 306 
-     :drop-xp 1
-     :hp 5))
+     :hp 1))
 
 
   (define (damage-enemy! e amount)
@@ -696,7 +701,6 @@
       (vec2-add new-position cowboy-vec)))
 
   (define (update-sword sword game-time)
-    (t80::trace (object->string game-time))
     (define position (sword-position (sword :cowboy) game-time (sword :index)))
     (set! (sword :x) (floor (vec2-x position)))
     (set! (sword :y) (floor (vec2-y position))))
@@ -721,8 +725,7 @@
       (let* ((sword-count (length (filter (lambda (u) (eq? (u :id) :sword)) (self :player :upgrades))))
 	     (new-sword (make-sword (self :player) sword-count)))
 	(set! (self :sword) new-sword)
-	(entity-store 'add! new-sword)
-	(t80::trace (object->string (entity-store))))))
+	(entity-store 'add! new-sword))))
 
   (define (sword-blueprint)
       (hash-table
@@ -783,7 +786,7 @@
        :max-cooldown 120 
        :range 64 
        :target #f
-       :damage 5 
+       :damage 7 
        :stats '(:max-cooldown :range :damage)
        :update update-revolver
        :render render-revolver))
@@ -947,7 +950,7 @@
 	(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))))
 
   (define (xp-needed level)
-    (+ 3 (* level 3)))
+    (+ 2 (* level 2)))
 
   (define (level-up! cowboy)
     (set! (cowboy :level) (+ 1 (cowboy :level)))
@@ -1013,7 +1016,7 @@
     (filter (lambda (e) (<= (e :min-time) elapsed)) enemy-types)) 
 
   (define (current-budget elapsed-seconds)
-    (+ 3 (* 0.10 elapsed-seconds))) 
+    (+ 1 (* 0.10 elapsed-seconds))) 
 
   (define (spend-budget budget elapsed)
     (let ((pool (available-enemies elapsed)))
