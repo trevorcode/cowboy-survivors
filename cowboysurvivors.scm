@@ -479,7 +479,7 @@
 	     (dir-y (cdr dir)))
 	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
 	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10)))))
-      (when (= 0 (modulo (e :time) 50))
+      (when (= 0 (modulo (e :time) 60))
 	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target))))))
 
   (define (make-scarab-queen x y target)
@@ -522,7 +522,7 @@
 	  (set! (e :white-flash?) #t)
 	  (co/spawn!
 	   (lambda (yield) 
-	     (for (i 0 6) (yield))
+	     (for (i 0 8) (yield))
 	     (set! (e :white-flash?) #f)
 	     (set! (e :hit-debounce) #f))))))
 
@@ -710,7 +710,7 @@
 		:cowboy cowboy
 		:radius 8
 		:type :weapon
-		:sprite 258
+		:sprite 263
 		:index index
 		:damage 1
 		:update update-sword
@@ -729,6 +729,7 @@
        :id :sword
        :type :upgrade
        :name "Sword"
+       :sprite 263
        :range 32 
        :sword #f
        :damage 1 
@@ -1159,7 +1160,7 @@
 	  (set! (cowboy :moving?) #f)))
 
     (define (update)
-      (when (< game-time 5)
+      (when (< game-time 2)
 	(level-up! cowboy))
       (entity-store 'remove-destroyed!)
       (hash-table-set! *camera* :target-x (cowboy :x))
@@ -1267,6 +1268,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
+    (t80::print "Cowboy Survivors" 5 5 0)
+    (t80::print "Cowboy Survivors"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
@@ -1341,6 +1344,7 @@
 ;; 004:f222ffff321121121211211172223fff77733fff777fffff77ffffff77ffffff
 ;; 005:8fff8fff88ff88fff88ff88fff88ff88ff88ff88f88ff88f88ff88ff8fff8fff
 ;; 006:ffffff99fffff999ffff999f9ff999ff66999ffff669ffff6666ffff66f69fff
+;; 007:fff43ffffff43ffffff43ffffff43ffffff44ffff888888ffff67ffffff67fff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
 ;; 048:fff775fff777757ff755f7577777177717f11f7751551f7f555f11fff777777f
