@@ -336,17 +336,17 @@
     (let ((cx (floor (/ x *cell-size*)))
 	  (cy (floor (/ y *cell-size*)))
 	  (cell-radius (max 1 (ceiling (/ radius *cell-size*))))
-	  (result '()))
+	  (buckets '()))
       (let loop-dx ((dx (- cell-radius)))
 	(when (<= dx cell-radius)
 	  (let loop-dy ((dy (- cell-radius)))
 	    (when (<= dy cell-radius)
 	      (let ((bucket (*grid* (cell-key (* *cell-size* (+ cx dx)) (* *cell-size* (+ cy dy))))))
 		(when (pair? bucket)
-		  (set! result (append bucket result))))
+		  (set! buckets (cons bucket buckets))))
 	      (loop-dy (+ dy 1))))
 	  (loop-dx (+ dx 1))))
-      result))
+      (apply append buckets)))
 
   (define (push-apart! e other)
     (let* ((dist-x (- (e :x) (other :x)))
@@ -576,6 +576,12 @@
 
 (module ui-module 
   (import-as coroutines co/)
+
+  (define (render-time game-time)
+    (let ((seconds (quotient game-time 60)))
+      (t80::print (string-append "Time " (number->string seconds)) 195 2 0)
+      (t80::print (string-append "Time " (number->string seconds)) 196 2 4)))
+
   (define (render-hp hp)
     (for (i 0 hp)
       (t80::spr 272 (* i 9) 0 15 1 0 0 1 1)))
@@ -711,7 +717,7 @@
   (import vec2-module)
   (define (sword-position cowboy t index)
     (let* ((sword-upgrades (filter (lambda (u) (eq? (u :id) :sword)) (cowboy :upgrades)))
-	   (sword-count (length sword-upgrades))
+	   (sword-count (cowboy :sword-count))
 	   (angle (+ (* t 0.05) (* index (/ (* 2 pi) sword-count))))
 	   (dir-vector (vec2 (cos angle) (sin angle)))
 	   (cowboy-vec (vec2 (cowboy :x) (cowboy :y)))
@@ -742,6 +748,7 @@
     (when (not (self :sword))
       (let* ((sword-count (length (filter (lambda (u) (eq? (u :id) :sword)) (self :player :upgrades))))
 	     (new-sword (make-sword (self :player) sword-count)))
+	(set! (self :player :sword-count) sword-count)
 	(set! (self :sword) new-sword)
 	(entity-store 'add! new-sword))))
 
@@ -1162,8 +1169,7 @@
     (define gems (list))
     (define game-map (generate-map 50)) 
     (define update-collisions (physics/collision-system 16))
-    (define cowboy (apply-gear! (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2))
-				   (*gear-catalog* :revolver)))
+    (define cowboy (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2)))
 
     (define (update-gem' gem)
       (update-gem gem cowboy collect-xp!))
@@ -1189,7 +1195,7 @@
 	  (set! (cowboy :moving?) #f)))
 
     (define (update)
-      (when (< game-time 2)
+      (when (< game-time 3)
 	(level-up! cowboy))
       (for-each (lambda (e)
 		  (when (e :destroy?)
@@ -1251,6 +1257,7 @@
      
 
       (render-hp (cowboy :hp))
+      (render-time game-time)
       (render-xp (cowboy :xp) (xp-needed (cowboy :level))))
 
     (hash-table
@@ -1302,8 +1309,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.6" 5 5 0)
-    (t80::print "Cowboy Survivors v0.6"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.7" 5 5 0)
+    (t80::print "Cowboy Survivors v0.7"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
