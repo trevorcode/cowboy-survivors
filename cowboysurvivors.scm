@@ -320,6 +320,10 @@
      (else (cons (car lst) (remove-entity (cdr lst) e)))))
 
   (define *grid* (hash-table))
+  (define *cell-size* 16)
+
+  (define (cell-key x y)
+      (+ (* (floor (/ x *cell-size*)) 100000) (floor (/ y *cell-size*))))
   
   (define (forget! e)
     (let ((key (e :cell-key)))
@@ -328,10 +332,43 @@
 	  (when bucket
 	    (set! (*grid* key) (remove-entity bucket e)))))))
 
+  (define (nearby-entities x y radius)
+    (let ((cx (floor (/ x *cell-size*)))
+	  (cy (floor (/ y *cell-size*)))
+	  (cell-radius (max 1 (ceiling (/ radius *cell-size*))))
+	  (result '()))
+      (let loop-dx ((dx (- cell-radius)))
+	(when (<= dx cell-radius)
+	  (let loop-dy ((dy (- cell-radius)))
+	    (when (<= dy cell-radius)
+	      (let ((bucket (*grid* (cell-key (* *cell-size* (+ cx dx)) (* *cell-size* (+ cy dy))))))
+		(when (pair? bucket)
+		  (set! result (append bucket result))))
+	      (loop-dy (+ dy 1))))
+	  (loop-dx (+ dx 1))))
+      result))
+
+  (define (push-apart! e other)
+    (let* ((dist-x (- (e :x) (other :x)))
+	   (dist-y (- (e :y) (other :y)))
+	   (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
+	   (min-dist (+ (e :radius) (other :radius)))
+	   (zero-dist? (= dist-sq 0))
+	   (dist (if zero-dist? 0.0 (sqrt dist-sq)))
+	   (dir-x (if zero-dist? 1.0 (/ dist-x dist)))
+	   (dir-y (if zero-dist? 0.0 (/ dist-y dist)))
+	   (overlap (* 0.5 (- min-dist dist)))
+	   (push-x (* overlap dir-x))
+	   (push-y (* overlap dir-y)))
+      (set! (e :x) (+ (e :x) push-x))
+      (set! (e :y) (+ (e :y) push-y))
+      (set! (other :x) (- (other :x) push-x))
+      (set! (other :y) (- (other :y) push-y))))
+
   (define (collision-system cell-size)
     (set! *grid* (hash-table))
-    (define (cell-key x y)
-      (+ (* (floor (/ x cell-size)) 100000) (floor (/ y cell-size))))
+    (set! *cell-size* cell-size)
+    
 
     (define (update-membership! e)
       (let ((new-key (cell-key (e :x) (e :y)))
@@ -361,7 +398,9 @@
 		       (let ((a (entities i))
 			     (b (entities j)))
 			 (when (overlapping? a b)
-			   (set! collisions (cons (cons a b) collisions))))))
+			   (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
+			       (push-apart! a b)
+			       (set! collisions (cons (cons a b) collisions)))))))
 
 	     (for-each
               (lambda (offset)
@@ -372,7 +411,9 @@
                        (for-each
 			(lambda (b)
                           (when (overlapping? a b)
-                            (set! collisions (cons (cons a b) collisions))))
+			    (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
+				(push-apart! a b)
+				(set! collisions (cons (cons a b) collisions)))))
 			neighbor-cell))
                      entities))))
               neighbor-offsets)))
@@ -383,23 +424,7 @@
       (for-each update-membership! entities)
       (find-collisions)))
 
-  (define (push-apart! e other)
-    (when (overlapping? e other)
-      (let* ((dist-x (- (e :x) (other :x)))
-	     (dist-y (- (e :y) (other :y)))
-	     (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
-	     (min-dist (+ (e :radius) (other :radius)))
-	     (zero-dist? (= dist-sq 0))
-	     (dist (if zero-dist? 0.0 (sqrt dist-sq)))
-	     (dir-x (if zero-dist? 1.0 (/ dist-x dist)))
-	     (dir-y (if zero-dist? 0.0 (/ dist-y dist)))
-	     (overlap (* 0.5 (- min-dist dist)))
-	     (push-x (* overlap dir-x))
-	     (push-y (* overlap dir-y)))
-	(set! (e :x) (+ (e :x) push-x))
-	(set! (e :y) (+ (e :y) push-y))
-	(set! (other :x) (- (other :x) push-x))
-	(set! (other :y) (- (other :y) push-y)))))
+  
 
   (define *collision-handlers* (hash-table))
 
@@ -532,11 +557,6 @@
 	     (set! (e :hit-debounce) #f))))))
 
   (on-collision!
-   :enemy :enemy
-   (lambda (a b)
-     (push-apart! a b)))
-
-  (on-collision!
    :projectile :enemy
    (lambda (a b)
      (when (damage-enemy! b (a :damage))
@@ -547,14 +567,21 @@
    (lambda (w e)
      (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
 
-  (define (make-xp-orb x y)
-    (hash-table
-     :type :xp
-     :x x
-     :y y
-     :radius 8
-     :sprite 259)))
+  )
 
+(module gem-module
+  (import physics)
+    (define (make-xp-orb x y)
+      (hash-table
+       :x x
+       :y y
+       :sprite 259))
+
+  (define (update-gem gem cowboy collect-xp!)
+    (if (within? gem cowboy 16)
+	(begin (collect-xp! cowboy 1)
+	       #f)
+	gem)))
 
 (module ui-module 
   (import-as coroutines co/)
@@ -746,6 +773,7 @@
 
 (module revolver 
   (import projectile)
+  (import-as physics physics/)
 
   (define (make-bullet x y direction speed damage)
     (make-projectile x y direction speed damage))
@@ -763,8 +791,8 @@
 	  (set! (self :cooldown) (- (self :cooldown) 1 ))
 	  (let ((target (list->random (filter (lambda (e)
 						(and (eq? (e :type) :enemy)
-						     (within? cowboy e (self :range))))
-					      (entity-store)))))
+						     (physics/within? cowboy e (self :range))))
+					      (physics/nearby-entities (cowboy :x) (cowboy :y) (self :range))))))
 	    (set! (self :target) target)))
       
       (when (and (self :target)  (<= (self :cooldown) 0))
@@ -965,7 +993,7 @@
   (physics/on-collision! :xp :player
 		 (lambda (a cowboy)
 		   (set! (a :destroy?) #t)
-		   (collect-xp! cowboy 1)))
+		   ))
 
   (physics/on-collision! :player :enemy
 		 (lambda (a b)
@@ -1134,16 +1162,24 @@
   (import world)
   (import game-over-scene)
   (import pause-menu)
+  (import gem-module)
 
   (define game-time 0)
 
   (define (make-game-scene)
     (set! game-time 0)
     (define entity-store (make-entity-store))
+    (define gems (list))
     (define game-map (generate-map 50)) 
     (define get-collisions (physics/collision-system 16))
     (define cowboy (apply-gear! (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2))
 				   (*gear-catalog* :revolver)))
+
+    (define (update-gem' gem)
+      (update-gem gem cowboy collect-xp!))
+
+    (define (update-gems)
+      (set! gems (filter update-gem' gems)))
 
     (entity-store 'add! cowboy)
     (set! (*camera* :x) (cowboy :x))
@@ -1191,13 +1227,15 @@
 	   ((upgrade :update) upgrade entity-store)))
        (cowboy :upgrades))
 
+      (update-gems)
+
       (define collisions (get-collisions (entity-store)))
       (for-each dispatch-collision! collisions)
 
       (process-events
        (lambda (event)
 	 (case (car event)
-	   ((spawn-xp) (entity-store 'add! (make-xp-orb (cadr event) (caddr event))))
+	   ((spawn-xp) (set! gems (cons (make-xp-orb (cadr event) (caddr event)) gems)))
 	   ((spawn-scarab) (entity-store 'add! (make-scarab (cadr event) (caddr event) (cadddr event))))))))
 
     (define (render)
@@ -1208,12 +1246,13 @@
       (for-each 
        (lambda (e)
 	 (case (e :type)
-	   ((:enemy :xp)
+	   ((:enemy)
 	    (render-entity e))
 	   ((:projectile :weapon)
 	    ((e :render) e))))
-
        (entity-store))
+
+      (for-each render-entity gems)
 
       (for-each
        (lambda (upgrade)
@@ -1274,8 +1313,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors" 5 5 0)
-    (t80::print "Cowboy Survivors"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.4" 5 5 0)
+    (t80::print "Cowboy Survivors v0.4"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
