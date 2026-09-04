@@ -142,6 +142,8 @@
   (define (push-scene! scene) (set! *scenes* (cons scene *scenes*))) 
   (define (pop-scene!) (set! *scenes* (cdr *scenes*))) 
   (define (set-scene! scene) (set! *scenes* (list scene))) 
+  (define (swap-below! new-scene)
+    (set! *scenes* (cons (car *scenes*) (cons new-scene (cddr *scenes*)))))
   (define (current-scene) (car *scenes*))
 
   (define (run-scenes!)
@@ -265,6 +267,27 @@
 		     (4 4 0))))))
 	    (loop (+ i 1)))))
       )))
+
+(module vec2-module
+  (define (vec2 x y)
+    (cons x y))
+
+  (define (vec2-x v)
+    (car v))
+  (define (vec2-y v)
+    (cdr v))
+
+  (define (vec2-add a b)
+    (vec2 (+ (vec2-x a) (vec2-x b))
+	  (+ (vec2-y a) (vec2-y b))))
+
+  (define (vec2-sub a b)
+    (vec2 (- (vec2-x a) (vec2-x b))
+	  (- (vec2-y a) (vec2-y b))))
+
+  (define (vec2-scale a s)
+    (vec2 (* (vec2-x a) s)
+	  (* (vec2-y a) s))))
 
 (module physics 
     (define (overlapping? a b)
@@ -450,7 +473,7 @@
      :hp 20))
 
   (define (scarab-queen-update e)
-    (if (not (within? (e :target) e 80))
+    (if (not (within? (e :target) e 72))
       (let* ((dir (direction-to e (e :target)))
 	     (dir-x (car dir))
 	     (dir-y (cdr dir)))
@@ -513,6 +536,11 @@
    (lambda (a b)
      (when (damage-enemy! b (a :damage))
        (set! (a :destroy?) #t))))
+
+  (on-collision!
+   :weapon :enemy
+   (lambda (w e)
+     (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
 
   (define (make-xp-orb x y)
     (hash-table
@@ -593,14 +621,6 @@
 	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
 	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))))
 
-(module weapon
-    (define (update-weapon! self entity-store)
-      #t
-      
-      )
-
-  )
-
 (module projectile
   (define (update-bullet e) #t)
   
@@ -619,6 +639,21 @@
 		:damage damage
 		:update update-bullet
 		:render render-bullet)))
+(module damage-item 
+  (define (damage-blueprint)
+    (hash-table
+     :id :damage-item
+     :type :upgrade
+     :sprite 262
+     :name "Damage"
+     :damage 1
+     :stats '(:damage)
+     :description "Gives extra damage"))
+
+  (define (make-damage-item cowboy)
+    (let ((new-damage (damage-blueprint)))
+      (set! (cowboy :extra-damage) (+ 1 (cowboy :extra-damage)))
+      new-damage)))
 
 (module speed-item 
   (define (speed-blueprint)
@@ -648,6 +683,63 @@
       (set! (cowboy :hp) (+ 1 (cowboy :hp)))
       new-heart)))
 
+(module sword 
+  (import utility)
+  (import vec2-module)
+  (define (sword-position cowboy t index)
+    (let* ((sword-upgrades (filter (lambda (u) (eq? (u :id) :sword)) (cowboy :upgrades)))
+	   (sword-count (length sword-upgrades))
+	   (angle (+ (* t 0.05) (* index (/ (* 2 pi) sword-count))))
+	   (dir-vector (vec2 (cos angle) (sin angle)))
+	   (cowboy-vec (vec2 (cowboy :x) (cowboy :y)))
+	   (new-position (vec2-scale dir-vector 32))) 
+      (vec2-add new-position cowboy-vec)))
+
+  (define (update-sword sword game-time)
+    (t80::trace (object->string game-time))
+    (define position (sword-position (sword :cowboy) game-time (sword :index)))
+    (set! (sword :x) (floor (vec2-x position)))
+    (set! (sword :y) (floor (vec2-y position))))
+
+  (define (render-sword self)
+    (t80::spr (self :sprite) (camera-transform (self :x) (self :y)) 15 1 0 0 1 1))
+  
+  (define (make-sword cowboy index)
+    (hash-table :x (cowboy :x)
+		:y (cowboy :y)
+		:cowboy cowboy
+		:radius 8
+		:type :weapon
+		:sprite 258
+		:index index
+		:damage 1
+		:update update-sword
+		:render render-sword))
+
+  (define (update-sword-blueprint self entity-store)
+    (when (not (self :sword))
+      (let* ((sword-count (length (filter (lambda (u) (eq? (u :id) :sword)) (self :player :upgrades))))
+	     (new-sword (make-sword (self :player) sword-count)))
+	(set! (self :sword) new-sword)
+	(entity-store 'add! new-sword)
+	(t80::trace (object->string (entity-store))))))
+
+  (define (sword-blueprint)
+      (hash-table
+       :id :sword
+       :type :upgrade
+       :name "Sword"
+       :range 32 
+       :sword #f
+       :damage 1 
+       :stats '(:damage)
+       :update update-sword-blueprint))
+
+  (define (make-sword-gear cowboy)
+    (let ((new-sword-blueprint (sword-blueprint)))
+      (set! (new-sword-blueprint :player) cowboy)
+      new-sword-blueprint)))
+
 (module revolver 
   (import projectile)
 
@@ -675,7 +767,7 @@
 	(entity-store 'add! (make-bullet (cowboy :x) (cowboy :y)
 					 (direction-to cowboy (self :target))
 					 40
-					 (self :damage)))
+					 (+ (cowboy :extra-damage) (self :damage))))
 	(set! (self :target) #f)
 	(set! (self :cooldown) (self :max-cooldown)))))
 
@@ -720,7 +812,7 @@
 	((remove-destroyed!) (remove-destroyed!))
 	(else entities))))
 
-  (define (update-entity e)
+  (define (update-entity e game-time)
     (eh/update-duration e)
     (eh/update-direction e)
     (eh/update-time e)
@@ -734,20 +826,27 @@
        ((e :update) e))
 
       ((:projectile)
-       ((e :update) e)))))
+       ((e :update) e))
+
+      ((:weapon)
+       ((e :update) e game-time))
+      )))
 
 (module level-up-scene
   (import scene-module)
   (import revolver)
   (import extra-heart)
   (import speed-item)
+  (import damage-item)
+  (import sword)
 
   (define *gear-catalog*
     (hash-table
      :revolver (cons (revolver-blueprint) make-revolver)
      :heart (cons (heart-blueprint) make-extra-heart)
      :speed-item (cons (speed-blueprint) make-speed-item)
-     )) 
+     :damage-item (cons (damage-blueprint) make-damage-item)
+     :sword (cons (sword-blueprint) make-sword-gear))) 
 
   (define (randomize-list lst)
     (map cdr
@@ -804,7 +903,7 @@
      :input (lambda ()
 		  (when (t80::btnp 3) (set! selected (modulo (+ selected 1) (length options))))
 		  (when (t80::btnp 2) (set! selected (modulo (- selected 1) (length options))))
-		  (when (t80::btnp 5)
+		  (when (t80::btnp 4)
 		    (apply-gear! cowboy (list-ref options selected))
 		    (pop-scene!)))
      :update (lambda () #t)
@@ -893,6 +992,7 @@
 	     :speed 10
 	     :level 1
 	     :xp 0
+	     :extra-damage 0
 	     :upgrades (list)
 	     :update (lambda (x y) #f)
 	     :hp 5
@@ -905,8 +1005,8 @@
   (define enemy-types
     (list
      (hash-table :id :tumbleweed :cost 1 :min-time 0 :make make-tumbleweed)
-     (hash-table :id :big-tumbleweed :cost 2 :min-time 30 :make make-big-tumbleweed)
-     (hash-table :id :scarab-queen :cost 6 :min-time 60 :make make-scarab-queen))) 
+     (hash-table :id :big-tumbleweed :cost 2 :min-time 40 :make make-big-tumbleweed)
+     (hash-table :id :scarab-queen :cost 7 :min-time 80 :make make-scarab-queen))) 
 
   (define (available-enemies elapsed)
     (filter (lambda (e) (<= (e :min-time) elapsed)) enemy-types)) 
@@ -937,6 +1037,7 @@
 		    (let ((coords (get-random-position-radius-cowboy cowboy 128)))
 		      (entity-store 'add! ((enemy :make) (car coords) (cdr coords) cowboy))))
 		  (spend-budget (current-budget seconds) seconds))))))
+
 
 (module pause-menu
   (import scene-module)
@@ -1033,6 +1134,7 @@
   (define game-time 0)
 
   (define (make-game-scene)
+    (set! game-time 0)
     (define entity-store (make-entity-store))
     (define game-map (generate-map 50)) 
     (define get-collisions (physics/collision-system 16))
@@ -1040,6 +1142,8 @@
 				   (*gear-catalog* :revolver)))
 
     (entity-store 'add! cowboy)
+    (set! (*camera* :x) (cowboy :x))
+    (set! (*camera* :y) (cowboy :y))
 
     (define (input)
       (if (t80::btn 3) (move-cowboy-x! game-map cowboy #t))
@@ -1047,7 +1151,7 @@
       (if (t80::btn 2) (move-cowboy-x! game-map cowboy #f))
       (if (t80::btn 0) (move-cowboy-y! game-map cowboy #f))
 
-      (when (t80::btn 4) (push-scene! (make-pause-menu (cowboy :upgrades))))
+      (when (t80::btnp 5) (push-scene! (make-pause-menu (cowboy :upgrades))))
       
       (if (or (t80::btn 0) (t80::btn 1)
 	      (t80::btn 2) (t80::btn 3))
@@ -1064,9 +1168,15 @@
 
       (set! game-time (+ 1 game-time))
       (when (<= (cowboy :hp) 0)
-	(push-scene! (make-game-over-scene (lambda () (set-scene! (make-game-scene))))))
+	(push-scene! (make-game-over-scene
+		      (lambda ()
+			(push-scene!
+			 (make-transition-scene
+			  (lambda ()
+			    (swap-below! (make-main-menu-scene)))
+			  40))))))
       (spawn-enemies entity-store cowboy game-time)
-      (for-each update-entity (entity-store))
+      (for-each (lambda (e) (update-entity e game-time)) (entity-store))
 
       (for-each
        (lambda (upgrade)
@@ -1093,7 +1203,7 @@
 	 (case (e :type)
 	   ((:enemy :xp)
 	    (render-entity e))
-	   ((:projectile)
+	   ((:projectile :weapon)
 	    ((e :render) e))))
 
        (entity-store))
@@ -1113,10 +1223,80 @@
      :update update
      :render render)))
 
+(module transition-scene
+  (import scene-module)
+  (import utility)
+
+  (define (render-transition-screen x y)
+    (for (i 0 15)
+      (for (j 0 9)
+	 (t80::spr 66 (+ x (* 16 i)) (+ y (* 16 j)) -1 1 0 0 2 2))))
+  
+  (define (make-transition-scene on-swap duration)
+    (define elapsed 0)
+    (define phase :out)
+    
+    (hash-table
+     :input (lambda () #t)
+     :update (lambda ()
+	       (set! elapsed (+ 1 elapsed))
+	       (when (<= duration elapsed)
+		 (case phase
+		   ((:out)
+		    (on-swap)
+		    (set! phase :in)
+		    (set! elapsed 0))
+		   ((:in)
+		    (pop-scene!)))))
+     :render (lambda ()
+	       (let ((progress (/ elapsed duration)))
+		 (if (eq? phase :in)
+		     (render-transition-screen 0 (floor (* screen-height (ease-out-cubic progress))))
+		     (render-transition-screen 0 (floor (- screen-height (* screen-height (ease-out-cubic progress)))))))))))
+
+(module main-menu-scene
+  (import scene-module)
+  (import game-scene-module)
+  (import transition-scene)
+
+  (define (menu-option x y name selected?)
+    (t80::print name x y 0)
+    (t80::print name (+ 1 x) (+ 1 y) 4)
+    (when selected? 
+      (t80::tri x (+ 4 y) (- x 4) y (- x 4) (+ 8 y) 14)))
+  
+  (define (render-main-menu-scene menu-options selected)
+    (t80::cls 0)
+    (for-each 
+     (lambda (option i)
+       (menu-option 30 30 (option :text) (= selected i)))
+     menu-options
+     (range (length menu-options))))
+
+  (define (make-main-menu-scene)
+    (define selected 0)
+    (define menu-options
+      (list (hash-table :text "Play"
+			:fn (lambda ()
+			      (push-scene!
+			       (make-transition-scene
+				(lambda ()
+				  (swap-below! (make-game-scene)))
+				40))))))
+    
+    (hash-table
+     :input (lambda ()
+	      (when (t80::btnp 1) (set! selected (modulo (+ selected 1) 1)))
+	      (when (t80::btnp 4) (set! selected (modulo (- selected 1) 1)))
+	      (when (t80::btnp 5)
+		(((list-ref menu-options selected) :fn))))
+     :update (lambda () #t)
+     :render (lambda () (render-main-menu-scene menu-options selected)))))
 
 (import scene-module)
-(import game-scene-module)
-(push-scene! (make-game-scene))
+(import-as coroutines co/)
+(import main-menu-scene)
+(push-scene! (make-main-menu-scene))
 (define t 0)
 
 (define (TIC)
@@ -1145,8 +1325,12 @@
 ;; 051:7700777077707770770077007000700770007007700070070000000700000000
 ;; 064:fffff111fff11000ff100000f1000011f1001100100010001001000110010010
 ;; 065:111fffff00011fff000001ff1100001f0011001f000010011100010100100101
+;; 066:0001011110011000001000000100001111001100100010001001000110010010
+;; 067:1110001000011001000001001100001000110011000010011100010100100101
 ;; 080:100100101001000110001000f1000100f1000011ff100000fff11000fffff111
 ;; 081:0001010110010101000100010010001f1100001f000001ff00011fff111fffff
+;; 082:1001001010010001100010001100010001000011001000001101100000100111
+;; 083:0001011110011000001000000100001111001100100010001001000110010010
 ;; </TILES>
 
 ;; <SPRITES>
@@ -1156,6 +1340,7 @@
 ;; 003:fffeefffffeddefffed4ddefffeddefffeddddefffeddefffffeefffffffffff
 ;; 004:f222ffff321121121211211172223fff77733fff777fffff77ffffff77ffffff
 ;; 005:8fff8fff88ff88fff88ff88fff88ff88ff88ff88f88ff88f88ff88ff8fff8fff
+;; 006:ffffff99fffff999ffff999f9ff999ff66999ffff669ffff6666ffff66f69fff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
 ;; 048:fff775fff777757ff755f7577777177717f11f7751551f7f555f11fff777777f
