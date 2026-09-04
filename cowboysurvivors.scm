@@ -575,13 +575,8 @@
 	#f
 	(begin 
 	  (set! (e :hp) (- (e :hp) amount))
-	  (set! (e :hit-debounce) #t)
-	  (set! (e :white-flash?) #t)
-	  (co/spawn!
-	   (lambda (yield) 
-	     (for (i 0 8) (yield))
-	     (set! (e :white-flash?) #f)
-	     (set! (e :hit-debounce) #f))))))
+	  (set! (e :hit-debounce) 8)
+	  (set! (e :white-flash?) #t))))
 
   (on-collision!
    :projectile :enemy
@@ -676,6 +671,14 @@
 	       (sv 3 2) (sv 3 3) 0 key)))
 
 (module entity-helpers
+  (define (update-hit-debounce e)
+    (when (and (e :hit-debounce) )
+      (if (< 0 (e :hit-debounce))
+	  (set! (e :hit-debounce) (- (e :hit-debounce) 1)) 
+	  (begin 
+	    (set! (e :hit-debounce) #f)
+	    (set! (e :white-flash?) #f)))))
+
   (define (update-duration e)
       (when (e :duration)
 	(set! (e :duration) (- (e :duration) 1))
@@ -889,6 +892,7 @@
     (eh/update-duration e)
     (eh/update-direction e)
     (eh/update-time e)
+    (eh/update-hit-debounce e)
     
     (case (e :type)
       ((:enemy)
