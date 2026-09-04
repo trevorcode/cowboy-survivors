@@ -365,10 +365,21 @@
       (set! (other :x) (- (other :x) push-x))
       (set! (other :y) (- (other :y) push-y))))
 
+  (define *collision-handlers* (hash-table))
+
+  (define (on-collision! a-type b-type handler)
+    (hash-table-set! *collision-handlers* (cons a-type b-type) handler))
+
+  (define (dispatch-collision! a b)
+    (let* ((a-type (a :type))
+	   (b-type (b :type)))
+      (cond ((*collision-handlers* (cons a-type b-type)) => (lambda (h) (h a b)))
+	    ((*collision-handlers* (cons b-type a-type)) => (lambda (h) (h b a)))
+	    (else #f))))
+
   (define (collision-system cell-size)
     (set! *grid* (hash-table))
     (set! *cell-size* cell-size)
-    
 
     (define (update-membership! e)
       (let ((new-key (cell-key (e :x) (e :y)))
@@ -385,60 +396,43 @@
 
     (define neighbor-offsets '((1 . 0) (1 . 1) (0 . 1) (-1 . 1)))
 
-    (define (find-collisions)
-      (let ((collisions (list)))
-	(for-each
-	 (lambda (grid-entry)
-	   (let* ((cx (floor (/ (car grid-entry) 100000)))
-		  (cy (- (car grid-entry) (* cx 100000)))
-		  (entities (cdr grid-entry))
-		  (entity-count (length entities)))
-	     (for (i 0 entity-count)
-		  (for (j (+ i 1) entity-count)
-		       (let ((a (entities i))
-			     (b (entities j)))
-			 (when (overlapping? a b)
-			   (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
-			       (push-apart! a b)
-			       (set! collisions (cons (cons a b) collisions)))))))
+    (define (find-and-dispatch-collisions)
+      (for-each
+       (lambda (grid-entry)
+	 (let* ((cx (floor (/ (car grid-entry) 100000)))
+		(cy (- (car grid-entry) (* cx 100000)))
+		(entities-vec (list->vector (cdr grid-entry))) 
+		(entity-count (length entities-vec)))
+	   (for (i 0 entity-count)
+		(for (j (+ i 1) entity-count)
+		     (let ((a (entities-vec i))
+			   (b (entities-vec j)))
+		       (when (overlapping? a b)
+			 (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
+			     (push-apart! a b)
+			     (dispatch-collision! a b))))))
 
-	     (for-each
-              (lambda (offset)
-		(let ((neighbor-cell (*grid* (cell-key (* cell-size (+ cx (car offset))) (* cell-size (+ cy (cdr offset)))))))
-                  (when neighbor-cell
-                    (for-each
-                     (lambda (a)
-                       (for-each
-			(lambda (b)
-                          (when (overlapping? a b)
-			    (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
-				(push-apart! a b)
-				(set! collisions (cons (cons a b) collisions)))))
-			neighbor-cell))
-                     entities))))
-              neighbor-offsets)))
-	 *grid*)
-	collisions))
+	   (for-each
+            (lambda (offset)
+	      (let ((neighbor-cell (*grid* (cell-key (* cell-size (+ cx (car offset))) (* cell-size (+ cy (cdr offset)))))))
+                (when neighbor-cell
+                  (for-each
+                   (lambda (a)
+                     (for-each
+		      (lambda (b)
+                        (when (overlapping? a b)
+			  (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
+			      (push-apart! a b)
+			      (dispatch-collision! a b))))
+		      neighbor-cell))
+                   entities-vec))))
+            neighbor-offsets)))
+       *grid*))
 
     (lambda (entities)
       (for-each update-membership! entities)
-      (find-collisions)))
-
-  
-
-  (define *collision-handlers* (hash-table))
-
-  (define (on-collision! a-type b-type handler)
-    (hash-table-set! *collision-handlers* (cons a-type b-type) handler))
-
-  (define (dispatch-collision! collision-pair)
-    (let* ((a (car collision-pair))
-	   (b (cdr collision-pair))
-	   (a-type (a :type))
-	   (b-type (b :type)))
-      (cond ((*collision-handlers* (cons a-type b-type)) => (lambda (h) (h a b)))
-	    ((*collision-handlers* (cons b-type a-type)) => (lambda (h) (h b a)))
-	    (else #f)))))
+      (find-and-dispatch-collisions)))
+  )
 
 (module enemies 
   (import physics)
@@ -449,28 +443,25 @@
 	   (dir-y (cdr dir)))
       (set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
       (set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
-  
+
+  (define (sprite-frame e)
+    (let ((sprite (e :sprite)))
+      (if (pair? sprite)
+	  (list-ref sprite (modulo (quotient (e :time) 10) (length sprite)))
+	  sprite)))
+
+  (define (draw-sprite-frame e frame)
+    (if (pair? frame)
+	(t80::spr (car frame) (camera-transform (e :x) (e :y)) 15 (or (e :scale) 1) 0 0 (cadr frame) (caddr frame))
+	(t80::spr frame (camera-transform (e :x) (e :y)) 15 (or (e :scale) 1) 0 0 1 1)))
 
   (define (render-entity e)
-    (define (sprite-frame e)
-      (let ((sprite (e :sprite)))
-	(if (pair? sprite)
-	    (list-ref sprite (modulo (quotient (e :time) 10) (length sprite)))
-	    sprite)))
-
-    (define (draw-sprite e frame)
-      (if (pair? frame)
-	  (t80::spr (car frame) (camera-transform (e :x) (e :y)) 15 (or (e :scale) 1) 0 0 (cadr frame) (caddr frame))
-	  (t80::spr frame (camera-transform (e :x) (e :y)) 15 (or (e :scale) 1) 0 0 1 1)))
-
-
     (if (e :white-flash?)
 	(begin 
 	  (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) 4))
-	  (draw-sprite e (sprite-frame e))
+	  (draw-sprite-frame e (sprite-frame e))
 	  (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
-	
-	(draw-sprite e (sprite-frame e))))
+	(draw-sprite-frame e (sprite-frame e))))
   
   (define (make-tumbleweed x y target)
     (hash-table
@@ -861,8 +852,7 @@
        ((e :update) e))
 
       ((:weapon)
-       ((e :update) e game-time))
-      )))
+       ((e :update) e game-time)))))
 
 (module level-up-scene
   (import scene-module)
@@ -1171,7 +1161,7 @@
     (define entity-store (make-entity-store))
     (define gems (list))
     (define game-map (generate-map 50)) 
-    (define get-collisions (physics/collision-system 16))
+    (define update-collisions (physics/collision-system 16))
     (define cowboy (apply-gear! (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2))
 				   (*gear-catalog* :revolver)))
 
@@ -1229,8 +1219,7 @@
 
       (update-gems)
 
-      (define collisions (get-collisions (entity-store)))
-      (for-each dispatch-collision! collisions)
+      (update-collisions (entity-store))
 
       (process-events
        (lambda (event)
@@ -1313,8 +1302,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.4" 5 5 0)
-    (t80::print "Cowboy Survivors v0.4"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.6" 5 5 0)
+    (t80::print "Cowboy Survivors v0.6"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
