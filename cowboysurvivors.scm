@@ -313,21 +313,38 @@
           (let ((dist (sqrt dist-sq)))
             (cons (/ dx dist) (/ dy dist))))))
 
-  (define (collision-system cell-size)
-    (define grid (hash-table))
-    (define (cell-key x y)
-      (cons (floor (/ x cell-size))
-	    (floor (/ y cell-size))))
+  (define (remove-entity lst e)
+    (cond
+     ((null? lst) '())
+     ((eq? (car lst) e) (cdr lst))
+     (else (cons (car lst) (remove-entity (cdr lst) e)))))
 
-    (define (build-grid entities)
-      (set! grid (hash-table))
-      (for-each
-       (lambda (e)
-	 (let ((key (cell-key (e :x) (e :y))))
-	   (when (not (hash-table-ref grid key))
-	     (hash-table-set! grid key (list)))
-	   (hash-table-set! grid key (cons e (grid key)))))
-       entities))
+  (define *grid* (hash-table))
+  
+  (define (forget! e)
+    (let ((key (e :cell-key)))
+      (when key
+	(let ((bucket (*grid* key)))
+	  (when bucket
+	    (set! (*grid* key) (remove-entity bucket e)))))))
+
+  (define (collision-system cell-size)
+    (set! *grid* (hash-table))
+    (define (cell-key x y)
+      (+ (* (floor (/ x cell-size)) 100000) (floor (/ y cell-size))))
+
+    (define (update-membership! e)
+      (let ((new-key (cell-key (e :x) (e :y)))
+	    (old-key (e :cell-key)))
+	(when (not (equal? old-key new-key))
+	  (when old-key
+	    (let ((bucket (*grid* old-key)))
+	      (when (pair? bucket)
+		(set! (*grid* old-key) (remove-entity bucket e))
+		(when (null? (*grid* old-key)) (hash-table-set! *grid* old-key #f)))))
+
+	  (set! (*grid* new-key) (cons e (or (*grid* new-key) '())))
+	  (set! (e :cell-key) new-key))))
 
     (define neighbor-offsets '((1 . 0) (1 . 1) (0 . 1) (-1 . 1)))
 
@@ -335,8 +352,8 @@
       (let ((collisions (list)))
 	(for-each
 	 (lambda (grid-entry)
-	   (let* ((cx (car (car grid-entry)))
-		  (cy (cdr (car grid-entry)))
+	   (let* ((cx (floor (/ (car grid-entry) 100000)))
+		  (cy (- (car grid-entry) (* cx 100000)))
 		  (entities (cdr grid-entry))
 		  (entity-count (length entities)))
 	     (for (i 0 entity-count)
@@ -348,7 +365,7 @@
 
 	     (for-each
               (lambda (offset)
-		(let ((neighbor-cell (grid (cons (+ cx (car offset)) (+ cy (cdr offset))))))
+		(let ((neighbor-cell (*grid* (cell-key (* cell-size (+ cx (car offset))) (* cell-size (+ cy (cdr offset)))))))
                   (when neighbor-cell
                     (for-each
                      (lambda (a)
@@ -359,11 +376,11 @@
 			neighbor-cell))
                      entities))))
               neighbor-offsets)))
-	 grid)
+	 *grid*)
 	collisions))
 
     (lambda (entities)
-      (build-grid entities)
+      (for-each update-membership! entities)
       (find-collisions)))
 
   (define (push-apart! e other)
@@ -396,24 +413,7 @@
 	   (b-type (b :type)))
       (cond ((*collision-handlers* (cons a-type b-type)) => (lambda (h) (h a b)))
 	    ((*collision-handlers* (cons b-type a-type)) => (lambda (h) (h b a)))
-	    (else #f))))
-
-  (define (dispatch-collision-old! collision-pair)
-    (let* ((a (car collision-pair))
-	   (b (cdr collision-pair))
-	   (a-type (a :type))
-	   (b-type (b :type)))
-      (cond
-
-       ((and (eq? a-type :enemy) (eq? b-type :projectile))
-	(damage-enemy! a (b :damage))
-	(set! (b :destroy?) #t))
-
-       ((and (eq? a-type :enemy) (eq? b-type :projectile))
-	(set! (a :hp) (- (a :hp) (b :damage)))
-	(set! (b :destroy?) #t))
-       
-       (else #f)))))
+	    (else #f)))))
 
 (module enemies 
   (import physics)
@@ -950,7 +950,7 @@
 	(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))))
 
   (define (xp-needed level)
-    (+ 2 (* level 2)))
+    (+ 2 (* level 3)))
 
   (define (level-up! cowboy)
     (set! (cowboy :level) (+ 1 (cowboy :level)))
@@ -1124,7 +1124,7 @@
      :render (lambda () (render-game-over-scene)))))
 
 (module game-scene-module 
-  (import-as physics physics/)
+  (import-as physics physics/)  
   (import entity-store)
   (import cowboy-module)
   (import level-up-scene)
@@ -1165,6 +1165,9 @@
     (define (update)
       (when (< game-time 2)
 	(level-up! cowboy))
+      (for-each (lambda (e)
+		  (when (e :destroy?)
+		    (physics/forget! e))) (entity-store))
       (entity-store 'remove-destroyed!)
       (hash-table-set! *camera* :target-x (cowboy :x))
       (hash-table-set! *camera* :target-y (cowboy :y))
