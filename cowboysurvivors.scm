@@ -20,6 +20,36 @@
 (define-macro (import-as module prefix)
   `(apply varlet (curlet) (module/prefix ,module ',prefix)))
 
+(define-macro (define-record-type type-name constructor-spec predicate-name . field-specs)
+  (let* ((ctor-name (car constructor-spec))
+     (ctor-fields (cdr constructor-spec))
+     (fields (map car field-specs)))
+    `(begin
+       (define (,ctor-name ,@ctor-fields)
+     (vector ',type-name
+         ,@(map (lambda (f)
+              (if (memq f ctor-fields) f #f))
+            fields)))
+
+       (define (,predicate-name obj)
+     (eq? ',type-name (vector-ref obj 0)))
+
+       ,@(apply append 
+        (do ((i 1 (+ i 1))
+             (specs field-specs (cdr specs))
+             (acc '() (cons
+                   (let* ((spec (car specs))
+                      (getter (cadr spec))
+                      (setter (and (pair? (cddr spec)) (caddr spec))))
+                 (cons `(define (,getter obj)
+                      (vector-ref obj ,i))
+                       (if setter
+                       (list `(define (,setter obj val)
+                            (vector-set! obj ,i val)))
+                       '())))
+                   acc)))
+            ((null? specs) (reverse acc)))))))
+
 (define-macro (inc! x dx) `(set! ,x (+ ,x ,dx)))
 
 (define-macro (for args . body)
@@ -298,6 +328,12 @@
 	     (min-dist (+ (a :radius) (b :radius))))
 	(< dist-sq (* min-dist min-dist))))
 
+  (define (within-raw? x1 y1 x2 y2 dist)
+    (let* ((dist-x (- x1 x2))
+	   (dist-y (- y1 y2))
+	   (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y))))
+      (<= dist-sq (* dist dist))))
+
   (define (within? a b dist)
     (let* ((dist-x (- (a :x) (b :x)))
 	   (dist-y (- (a :y) (b :y)))
@@ -500,9 +536,9 @@
 	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
 	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10)))))
       (when (= 0 (modulo (e :time) 240))
-	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target)))
-	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target)))
-	(add-event! (list 'spawn-scarab (e :x) (e :y) (e :target))))))
+	(add-event! (vector 'spawn-scarab (e :x) (e :y) (e :target)))
+	(add-event! (vector 'spawn-scarab (e :x) (e :y) (e :target)))
+	(add-event! (vector 'spawn-scarab (e :x) (e :y) (e :target))))))
 
   (define (make-scarab-queen x y target)
     (hash-table
@@ -556,20 +592,27 @@
   (on-collision!
    :weapon :enemy
    (lambda (w e)
-     (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
-
-  )
+     (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage))))))
 
 (module gem-module
   (import physics)
-    (define (make-xp-orb x y)
-      (hash-table
-       :x x
-       :y y
-       :sprite 259))
+  (define (make-xp-orb x y)
+    (vector x y 259))
+
+  (define (gem-x gem)
+    (vector-ref gem 0))
+   
+  (define (gem-y gem)
+    (vector-ref gem 1))
+
+  (define (gem-sprite gem)
+    (vector-ref gem 2))
+
+  (define (render-gem gem)
+    (t80::spr (gem-sprite gem) (camera-transform (gem-x gem) (gem-y gem)) 15 1 0 0 1 1))
 
   (define (update-gem gem cowboy collect-xp!)
-    (if (within? gem cowboy 16)
+    (if (within-raw? (gem-x gem) (gem-y gem) (cowboy :x) (cowboy :y) 16)
 	(begin (collect-xp! cowboy 1)
 	       #f)
 	gem)))
@@ -851,7 +894,7 @@
       ((:enemy)
        (when (and (e :hp) (<= (e :hp) 0))
 	 (when (e :drop-xp)
-	   (add-event! (list 'spawn-xp (e :x) (e :y) (e :drop-xp))))
+	   (add-event! (vector 'spawn-xp (e :x) (e :y) (e :drop-xp))))
 	 (set! (e :destroy?) #t))
        ((e :update) e))
 
@@ -1229,9 +1272,9 @@
 
       (process-events
        (lambda (event)
-	 (case (car event)
-	   ((spawn-xp) (set! gems (cons (make-xp-orb (cadr event) (caddr event)) gems)))
-	   ((spawn-scarab) (entity-store 'add! (make-scarab (cadr event) (caddr event) (cadddr event))))))))
+	 (case (event 0)
+	   ((spawn-xp) (set! gems (cons (make-xp-orb (event 1) (event 2)) gems)))
+	   ((spawn-scarab) (entity-store 'add! (make-scarab (event 1) (event 2) (event 3))))))))
 
     (define (render)
       (t80::cls 0)
@@ -1247,7 +1290,7 @@
 	    ((e :render) e))))
        (entity-store))
 
-      (for-each render-entity gems)
+      (for-each render-gem gems)
 
       (for-each
        (lambda (upgrade)
@@ -1309,8 +1352,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.7" 5 5 0)
-    (t80::print "Cowboy Survivors v0.7"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.8" 5 5 0)
+    (t80::print "Cowboy Survivors v0.8"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
