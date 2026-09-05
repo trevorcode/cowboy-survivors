@@ -269,12 +269,11 @@
 		 (world-x (+ cam-tile-x screen-x)) 
 		 (world-y (+ cam-tile-y screen-y)))
 	    (when (and (in-bounds? world-x world-y))
-	      (call-with-values 
-		(lambda () (camera-transform (* 16 world-x) (* 16 world-y)))
-		(lambda (sx sy)
-		  (if (eq? (map-get-cell map-table world-x world-y) 'empty)
-		      (t80::rect sx sy 16 16 6)
-		      (t80::spr (map-get-cell map-table world-x world-y) sx sy -1 1 0 0 2 2)))))
+	      (let ((sx (floor (+ (*camera* :cx) (- (* 16 world-x) (*camera* :x)))))
+		    (sy (floor (+ (*camera* :cy) (- (* 16 world-y) (*camera* :y))))))
+		(if (eq? (map-get-cell map-table world-x world-y) 'empty)
+		    (t80::rect sx sy 16 16 6)
+		    (t80::spr (map-get-cell map-table world-x world-y) sx sy -1 1 0 0 2 2))))
 	    (loop (+ i 1)))))
 
       (let loop ((i 0))
@@ -285,17 +284,16 @@
 		 (world-y (+ cam-tile-y screen-y)))
 	    (when (or (not (in-bounds? world-x world-y))
 		      (eq? (map-get-cell map-table world-x world-y) 'empty))
-	      (call-with-values 
-		(lambda () (camera-transform (* 16 world-x) (* 16 world-y)))
-		(lambda (sx sy)
-		  (for-each
-		   (lambda (offset)
-		     (t80::spr 64
-			       (+ (car offset) sx)
-			       (+ (cadr offset) sy)
-			       15 1 0 (caddr offset) 2 2))
-		   '((-4 -4 0)
-		     (4 4 0))))))
+	      (let ((sx (floor (+ (*camera* :cx) (- (* 16 world-x) (*camera* :x)))))
+		    (sy (floor (+ (*camera* :cy) (- (* 16 world-y) (*camera* :y))))))
+		(for-each
+		 (lambda (offset)
+		   (t80::spr 64
+			     (+ (car offset) sx)
+			     (+ (cadr offset) sy)
+			     15 1 0 (caddr offset) 2 2))
+		 '((-4 -4 0)
+		   (4 4 0)))))
 	    (loop (+ i 1)))))
       )))
 
@@ -432,21 +430,25 @@
 
     (define neighbor-offsets '((1 . 0) (1 . 1) (0 . 1) (-1 . 1)))
 
+    (define (check-pair! a b)
+      (when (overlapping? a b)
+	(if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
+	    (push-apart! a b)
+	    (dispatch-collision! a b))))
+
     (define (find-and-dispatch-collisions)
       (for-each
        (lambda (grid-entry)
-	 (let* ((cx (floor (/ (car grid-entry) 100000)))
-		(cy (- (car grid-entry) (* cx 100000)))
-		(entities-vec (list->vector (cdr grid-entry))) 
-		(entity-count (length entities-vec)))
-	   (for (i 0 entity-count)
-		(for (j (+ i 1) entity-count)
-		     (let ((a (entities-vec i))
-			   (b (entities-vec j)))
-		       (when (overlapping? a b)
-			 (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
-			     (push-apart! a b)
-			     (dispatch-collision! a b))))))
+	 (let* ((key (car grid-entry))
+		(bucket (cdr grid-entry))
+		(cx (floor (/ key 100000)))
+		(cy (- key (* cx 100000))))
+
+	   (let loop ((lst bucket))
+	     (when (pair? lst)
+	       (let ((a (car lst)))
+		 (for-each (lambda (b) (check-pair! a b)) (cdr lst)))
+	       (loop (cdr lst))))
 
 	   (for-each
             (lambda (offset)
@@ -456,12 +458,9 @@
                    (lambda (a)
                      (for-each
 		      (lambda (b)
-                        (when (overlapping? a b)
-			  (if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
-			      (push-apart! a b)
-			      (dispatch-collision! a b))))
+                        (check-pair! a b))
 		      neighbor-cell))
-                   entities-vec))))
+                   bucket))))
             neighbor-offsets)))
        *grid*))
 
@@ -570,6 +569,93 @@
      :hp 1))
 
 
+  (define (make-snake-link tail?)
+    (hash-table
+     :type :link
+     :enemy-type :snake-link
+     :x 0
+     :y 0
+     :radius 8
+     :angle 0
+     :sprite (if tail? 310 309)
+     :hp 20))
+
+  (define (make-snake-head x y)
+    (hash-table
+     :type :link-head
+     :x x
+     :y y
+     :speed 0
+     :radius 8
+     :angle 0
+     :sprite 308))
+
+  (define (make-snake x y target)
+    (define links (list (make-snake-link #t)))
+    (for (i 0 20)
+	 (set! links (cons (make-snake-link #f) links)))
+
+    (hash-table
+     :type :boss
+     :target target
+     :links (cons (make-snake-head x y) links)))
+
+  (define (render-snake snake)
+    (let loop ((links (snake :links)))
+      (when (pair? links)
+	(let ((link (car links)))
+	  (if (link :white-flash?)
+	      (begin 
+		(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) 4))
+		(draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15)
+		(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
+	      (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15))
+	  (loop (cdr links))))))
+
+  (define (update-snake snake)
+    (let* ((head (car (snake :links)))
+	   (target-angle (atan (- (snake :target :y) (head :y))
+			       (- (snake :target :x) (head :x))))
+	   (angle-diff (- (modulo (+ (- target-angle (head :angle)) pi)
+				  (* 2 pi)) pi))
+	   (max-turn 0.010)
+	   (turn-factor (/ (abs angle-diff) pi))
+	   (speed (* 1 (- 1.0 (* 0.6 turn-factor)))))
+
+      (set! (head :angle)
+	(+ (head :angle)
+	   (max (- max-turn) (min max-turn angle-diff))))
+
+      (set! (head :x)
+	(+ (head :x) (* speed (cos (head :angle)))))
+      
+      (set! (head :y)
+	(+ (head :y) (* speed (sin (head :angle)))))
+
+      (when (null? (cdr (snake :links)))
+	(set! (snake :destroy?) #t))
+
+      (let loop ((links (cdr (snake :links)))
+		 (prev-link head))
+	(when (pair? links)
+	  (let* ((link (car links))
+		 (dx (- (prev-link :x) (link :x)))
+		 (dy (- (prev-link :y) (link :y)))
+		 (dist (sqrt (+ (* dx dx) (* dy dy)))))
+	    (when (<= (link :hp) 0)
+	      (add-event! (vector 'forget-entity link))
+	      (set! (link :destroy?) #t))
+	    (set! (link :angle) (prev-link :angle))
+	    (when (< 8 dist)
+	      (set! (link :x) (+ (link :x) (* (/ dx dist)
+					      (- dist 8))))
+	      (set! (link :y) (+ (link :y) (* (/ dy dist)
+					      (- dist 8)))))
+	    (loop (cdr links) link))))
+
+      (set! (snake :links) (filter (lambda (l) (not (l :destroy?))) (snake :links)))
+      ))
+
   (define (damage-enemy! e amount)
     (if (e :hit-debounce)
 	#f
@@ -577,6 +663,17 @@
 	  (set! (e :hp) (- (e :hp) amount))
 	  (set! (e :hit-debounce) 8)
 	  (set! (e :white-flash?) #t))))
+
+  (on-collision!
+   :projectile :link
+   (lambda (a b)
+     (when (damage-enemy! b (a :damage))
+       (set! (a :destroy?) #t))))
+
+  (on-collision!
+   :weapon :link
+   (lambda (w e)
+     (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
 
   (on-collision!
    :projectile :enemy
@@ -834,7 +931,7 @@
       (if (self :target)
 	  (set! (self :cooldown) (- (self :cooldown) 1 ))
 	  (let ((target (list->random (filter (lambda (e)
-						(and (eq? (e :type) :enemy)
+						(and (or (eq? (e :type) :enemy) (eq? (e :type) :link))
 						     (physics/within? cowboy e (self :range))))
 					      (physics/nearby-entities (cowboy :x) (cowboy :y) (self :range))))))
 	    (set! (self :target) target)))
@@ -900,7 +997,8 @@
 	 (when (e :drop-xp)
 	   (add-event! (vector 'spawn-xp (e :x) (e :y) (e :drop-xp))))
 	 (set! (e :destroy?) #t))
-       ((e :update) e))
+       (when (e :update)
+	 ((e :update) e)))
 
       ((:projectile)
        ((e :update) e))
@@ -997,14 +1095,12 @@
       (when (not (e :hit-debounce))
 	(set! (e :hp) (- (e :hp) amount))
 	(shake-effect! 2 10)
-	(set! (e :hit-debounce) #t)
+	(set! (e :hit-debounce) 50)
 	(set! (e :white-flash?) #t)
 	(co/spawn!
 	 (lambda (yield) 
 	   (for (i 0 6) (yield))
-	   (set! (e :white-flash?) #f)
-	   (for (i 0 44) (yield))
-	   (set! (e :hit-debounce) #f)))))
+	   (set! (e :white-flash?) #f)))))
 
   (define (render-cowboy cowboy)
     (t80::elli (camera-transform (cowboy :x) (+ 8 (cowboy :y))) 7 3 0)
@@ -1078,6 +1174,7 @@
 (module enemy-waves
   (import world)
   (import enemies) 
+
   (define enemy-types
     (list
      (hash-table :id :tumbleweed :cost 1 :min-time 0 :make make-tumbleweed)
@@ -1088,7 +1185,7 @@
     (filter (lambda (e) (<= (e :min-time) elapsed)) enemy-types)) 
 
   (define (current-budget elapsed-seconds)
-    (+ 1 (* 0.10 elapsed-seconds))) 
+    (+ 1 (* 0.05 elapsed-seconds))) 
 
   (define (spend-budget budget elapsed)
     (let ((pool (available-enemies elapsed)))
@@ -1108,12 +1205,11 @@
 
   (define (spawn-enemies entity-store cowboy t)
     (let ((seconds (/ t 60)))
-      (when (= 0 (modulo seconds 10))
+      (when (= 0 (modulo seconds 5))
 	(for-each (lambda (enemy)
 		    (let ((coords (get-random-position-radius-cowboy cowboy 128)))
 		      (entity-store 'add! ((enemy :make) (car coords) (cdr coords) cowboy))))
 		  (spend-budget (current-budget seconds) seconds))))))
-
 
 (module pause-menu
   (import scene-module)
@@ -1154,9 +1250,7 @@
 	   (t80::print display-name (+ 2 start-x) (+ 30 (* j 10) start-y) 0 #t 1 #t)
 	   (t80::print (object->string (upgrade stat)) (+ 42 start-x) (+ 30 (* j 10) start-y) 0)))
        (upgrade :stats)
-       (range (length (upgrade :stats)))))
-
-    )
+       (range (length (upgrade :stats))))))
 
   (define (render-pause-menu upgrades selected)
     (t80::rect 13 13 (- screen-width 26) (- screen-height 26) 0)
@@ -1214,9 +1308,15 @@
     (set! game-time 0)
     (define entity-store (make-entity-store))
     (define gems (list))
-    (define game-map (generate-map 50)) 
+    (define game-map (generate-map 35)) 
     (define update-collisions (physics/collision-system 16))
     (define cowboy (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2)))
+    (define snake (make-snake 25 25 cowboy))
+
+    (for-each
+     (lambda (l)
+       (entity-store 'add! l))
+     (cdr (snake :links)))
 
     (define (update-gem' gem)
       (update-gem gem cowboy collect-xp!))
@@ -1251,6 +1351,7 @@
       (hash-table-set! *camera* :target-x (cowboy :x))
       (hash-table-set! *camera* :target-y (cowboy :y))
       (update-camera!)
+      (update-snake snake)
 
       (set! game-time (+ 1 game-time))
       (when (<= (cowboy :hp) 0)
@@ -1271,12 +1372,12 @@
        (cowboy :upgrades))
 
       (update-gems)
-
       (update-collisions (entity-store))
 
       (process-events
        (lambda (event)
 	 (case (event 0)
+	   ((forget-entity) (physics/forget! (event 1)))
 	   ((spawn-xp) (set! gems (cons (make-xp-orb (event 1) (event 2)) gems)))
 	   ((spawn-scarab) (entity-store 'add! (make-scarab (event 1) (event 2) (event 3))))))))
 
@@ -1295,6 +1396,8 @@
        (entity-store))
 
       (for-each render-gem gems)
+
+      (render-snake snake)
 
       (for-each
        (lambda (upgrade)
@@ -1356,8 +1459,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.8" 5 5 0)
-    (t80::print "Cowboy Survivors v0.8"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.9" 5 5 0)
+    (t80::print "Cowboy Survivors v0.9"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
@@ -1435,13 +1538,22 @@
 ;; 007:fff43ffffff43ffffff43ffffff43ffffff44ffff888888ffff67ffffff67fff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
+;; 036:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+;; 037:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+;; 038:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ;; 048:fff775fff777757ff755f7577777177717f11f7751551f7f555f11fff777777f
 ;; 049:f777777fff11f555f7f1551577f11f7177717777757f557ff757777fff577fff
 ;; 050:ffffffffff3333fff377773f3077773f3077773ff377773fff3333ffffffffff
+;; 052:ffffffff111999ff1144919f11449449114494491144919f111999ffffffffff
+;; 053:ffffffff911444991144499911444999114449991144499991144499ffffffff
+;; 054:ffffffffffff1119fff44199f9441199f9441199fff44199ffff1119ffffffff
 ;; 064:ff000ffffffff0fffffff333ffff3777fff33777fff37777f337777733077777
 ;; 065:ff00ffff33ffffff333fffff7333000f77733fff77733fff77773fff77773fff
 ;; 066:fffff00ffffff0fffffff333ffff3777fff33777fff37777f337777733077777
 ;; 067:f0fff00f33fff0ff333f0fff73330fff77733fff77733fff77773fff77773fff
+;; 068:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+;; 069:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+;; 070:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ;; 080:33077777f3377777fff33777fff33777ffff3773fff03333f00fffff00fffff0
 ;; 081:77773fff77773fff77733fff7773ffff333000ffffff00000fffffff0fffffff
 ;; 082:33077777f3377777fff33777fff33777ffff3773fff03333ffff0fffffff0ff0
