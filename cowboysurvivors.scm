@@ -297,7 +297,7 @@
 	    (loop (+ i 1)))))
       )))
 
-(module vec2-module
+(module geometry
   (define (vec2 x y)
     (cons x y))
 
@@ -316,15 +316,14 @@
 
   (define (vec2-scale a s)
     (vec2 (* (vec2-x a) s)
-	  (* (vec2-y a) s))))
+	  (* (vec2-y a) s)))
 
-(module physics 
-    (define (overlapping? a b)
-      (let* ((dist-x (- (a :x) (b :x)))
-	     (dist-y (- (a :y) (b :y)))
-	     (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
-	     (min-dist (+ (a :radius) (b :radius))))
-	(< dist-sq (* min-dist min-dist))))
+  (define (overlapping? a b)
+    (let* ((dist-x (- (a :x) (b :x)))
+	   (dist-y (- (a :y) (b :y)))
+	   (dist-sq (+ (* dist-x dist-x) (* dist-y dist-y)))
+	   (min-dist (+ (a :radius) (b :radius))))
+      (< dist-sq (* min-dist min-dist))))
 
   (define (within-raw? x1 y1 x2 y2 dist)
     (let* ((dist-x (- x1 x2))
@@ -345,42 +344,16 @@
       (if (= dist-sq 0)
           (cons 1.0 0.0)
           (let ((dist (sqrt dist-sq)))
-            (cons (/ dx dist) (/ dy dist))))))
+            (cons (/ dx dist) (/ dy dist)))))))
+
+(module collision
+  (import geometry)
 
   (define (remove-entity lst e)
     (cond
      ((null? lst) '())
      ((eq? (car lst) e) (cdr lst))
      (else (cons (car lst) (remove-entity (cdr lst) e)))))
-
-  (define *grid* (hash-table))
-  (define *cell-size* 16)
-
-  (define (cell-key x y)
-      (+ (* (floor (/ x *cell-size*)) 100000) (floor (/ y *cell-size*))))
-  
-  (define (forget! e)
-    (let ((key (e :cell-key)))
-      (when key
-	(let ((bucket (*grid* key)))
-	  (when bucket
-	    (set! (*grid* key) (remove-entity bucket e)))))))
-
-  (define (nearby-entities x y radius)
-    (let ((cx (floor (/ x *cell-size*)))
-	  (cy (floor (/ y *cell-size*)))
-	  (cell-radius (max 1 (ceiling (/ radius *cell-size*))))
-	  (buckets '()))
-      (let loop-dx ((dx (- cell-radius)))
-	(when (<= dx cell-radius)
-	  (let loop-dy ((dy (- cell-radius)))
-	    (when (<= dy cell-radius)
-	      (let ((bucket (*grid* (cell-key (* *cell-size* (+ cx dx)) (* *cell-size* (+ cy dy))))))
-		(when (pair? bucket)
-		  (set! buckets (cons bucket buckets))))
-	      (loop-dy (+ dy 1))))
-	  (loop-dx (+ dx 1))))
-      (apply append buckets)))
 
   (define (push-apart! e other)
     (let* ((dist-x (- (e :x) (other :x)))
@@ -399,42 +372,73 @@
       (set! (other :x) (- (other :x) push-x))
       (set! (other :y) (- (other :y) push-y))))
 
-  (define *collision-handlers* (hash-table))
+  (define (make-collision-world cell-size)
+    (define grid (hash-table))
+    (define members '())
+    (define handlers (hash-table))
 
-  (define (on-collision! a-type b-type handler)
-    (hash-table-set! *collision-handlers* (cons a-type b-type) handler))
+    (define (cell-key x y)
+      (+ (* (floor (/ x cell-size)) 100000) (floor (/ y cell-size))))
 
-  (define (dispatch-collision! a b)
-    (let* ((a-type (a :type))
-	   (b-type (b :type)))
-      (cond ((*collision-handlers* (cons a-type b-type)) => (lambda (h) (h a b)))
-	    ((*collision-handlers* (cons b-type a-type)) => (lambda (h) (h b a)))
-	    (else #f))))
+    (define (bucket-add! key e)
+      (set! (grid key) (cons e (or (grid key) '()))))
 
-  (define (collision-system cell-size)
-    (set! *grid* (hash-table))
-    (set! *cell-size* cell-size)
+    (define (bucket-remove! key e)
+      (when (grid key) (set! (grid key) (remove-entity (grid key) e))))
+
+    (define (register! e)
+      (unless (memq e members)
+	(set! members (cons e members))
+	(let ((key (cell-key (e :x) (e :y))))
+	  (set! (e :collision-key) key)
+	  (bucket-add! key e))))
+
+    (define (unregister! e)
+      (set! members (remove-entity members e))
+      (let ((key (e :collision-key)))
+	(when key (bucket-remove! key e))
+	(set! (e :collision-key) #f)))
 
     (define (update-membership! e)
       (let ((new-key (cell-key (e :x) (e :y)))
-	    (old-key (e :cell-key)))
+	    (old-key (e :collision-key)))
 	(when (not (equal? old-key new-key))
-	  (when old-key
-	    (let ((bucket (*grid* old-key)))
-	      (when (pair? bucket)
-		(set! (*grid* old-key) (remove-entity bucket e))
-		(when (null? (*grid* old-key)) (hash-table-set! *grid* old-key #f)))))
+	  (when old-key (bucket-remove! old-key e))
+	  (bucket-add! new-key e)
+	  (set! (e :collision-key) new-key))))
 
-	  (set! (*grid* new-key) (cons e (or (*grid* new-key) '())))
-	  (set! (e :cell-key) new-key))))
-
-    (define neighbor-offsets '((1 . 0) (1 . 1) (0 . 1) (-1 . 1)))
+    (define (on-collision! a-type b-type handler)
+      (hash-table-set! handlers (cons a-type b-type) handler))
+    (define (dispatch-collision! a b)
+      (let* ((a-type (a :type))
+	     (b-type (b :type)))
+	(cond ((handlers (cons a-type b-type)) => (lambda (h) (h a b)))
+	      ((handlers (cons b-type a-type)) => (lambda (h) (h b a)))
+	      (else #f))))
 
     (define (check-pair! a b)
       (when (overlapping? a b)
 	(if (and (eq? (a :type) :enemy) (eq? (b :type) :enemy))
 	    (push-apart! a b)
 	    (dispatch-collision! a b))))
+
+    (define neighbor-offsets '((1 . 0) (1 . 1) (0 . 1) (-1 . 1)))
+
+    (define (nearby-entities x y radius)
+      (let ((cx (floor (/ x cell-size)))
+	    (cy (floor (/ y cell-size)))
+	    (cell-radius (max 1 (ceiling (/ radius cell-size))))
+	    (buckets '()))
+	(let loop-dx ((dx (- cell-radius)))
+	  (when (<= dx cell-radius)
+	    (let loop-dy ((dy (- cell-radius)))
+	      (when (<= dy cell-radius)
+		(let ((bucket (grid (cell-key (* cell-size (+ cx dx)) (* cell-size (+ cy dy))))))
+		  (when (pair? bucket)
+		    (set! buckets (cons bucket buckets))))
+		(loop-dy (+ dy 1))))
+	    (loop-dx (+ dx 1))))
+	(apply append buckets)))
 
     (define (find-and-dispatch-collisions)
       (for-each
@@ -443,7 +447,6 @@
 		(bucket (cdr grid-entry))
 		(cx (floor (/ key 100000)))
 		(cy (- key (* cx 100000))))
-
 	   (let loop ((lst bucket))
 	     (when (pair? lst)
 	       (let ((a (car lst)))
@@ -452,7 +455,7 @@
 
 	   (for-each
             (lambda (offset)
-	      (let ((neighbor-cell (*grid* (cell-key (* cell-size (+ cx (car offset))) (* cell-size (+ cy (cdr offset)))))))
+	      (let ((neighbor-cell (grid (cell-key (* cell-size (+ cx (car offset))) (* cell-size (+ cy (cdr offset)))))))
                 (when neighbor-cell
                   (for-each
                    (lambda (a)
@@ -462,15 +465,50 @@
 		      neighbor-cell))
                    bucket))))
             neighbor-offsets)))
-       *grid*))
+       grid))
 
-    (lambda (entities)
-      (for-each update-membership! entities)
-      (find-and-dispatch-collisions)))
-  )
+    (define (resolve!)
+      (for-each update-membership! members)
+      (find-and-dispatch-collisions))
+
+    (lambda* (action . args)
+      (case action
+	((register!) (apply register! args))
+	((unregister!) (apply unregister! args))
+	((on-collision!) (apply on-collision! args))
+	((nearby-entities) (apply nearby-entities args))
+	((resolve!) (resolve!))
+	(else members)))))
+
+(module entity-helpers
+  (define (update-hit-debounce e)
+    (when (and (e :hit-debounce) )
+      (if (< 0 (e :hit-debounce))
+	  (set! (e :hit-debounce) (- (e :hit-debounce) 1)) 
+	  (begin 
+	    (set! (e :hit-debounce) #f)
+	    (set! (e :white-flash?) #f)))))
+
+  (define (update-duration e)
+      (when (e :duration)
+	(set! (e :duration) (- (e :duration) 1))
+	(when (<= (e :duration) 0)
+	  (set! (e :destroy?) #t))))
+
+  (define (update-time e)
+    (when (e :time)
+      (set! (e :time) (+ (e :time) 1))))
+
+  (define (update-direction e)
+    (when (e :direction)
+      (let* ((dir-x (car (e :direction)))
+	     (dir-y (cdr (e :direction))))
+	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
+	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))))
 
 (module enemies 
-  (import physics)
+  (import collision)
+  (import entity-helpers)
        
   (define (enemy-follow-player e)
     (let* ((dir (direction-to e (e :target)))
@@ -568,38 +606,6 @@
      :sprite 306 
      :hp 1))
 
-
-  (define (make-snake-link tail?)
-    (hash-table
-     :type :link
-     :enemy-type :snake-link
-     :x 0
-     :y 0
-     :radius 8
-     :angle 0
-     :sprite (if tail? 310 309)
-     :hp 20))
-
-  (define (make-snake-head x y)
-    (hash-table
-     :type :link-head
-     :x x
-     :y y
-     :speed 0
-     :radius 8
-     :angle 0
-     :sprite 308))
-
-  (define (make-snake x y target)
-    (define links (list (make-snake-link #t)))
-    (for (i 0 20)
-	 (set! links (cons (make-snake-link #f) links)))
-
-    (hash-table
-     :type :boss
-     :target target
-     :links (cons (make-snake-head x y) links)))
-
   (define (render-snake snake)
     (let loop ((links (snake :links)))
       (when (pair? links)
@@ -642,8 +648,9 @@
 		 (dx (- (prev-link :x) (link :x)))
 		 (dy (- (prev-link :y) (link :y)))
 		 (dist (sqrt (+ (* dx dx) (* dy dy)))))
+	    (update-hit-debounce link)
 	    (when (<= (link :hp) 0)
-	      (add-event! (vector 'forget-entity link))
+	      (add-event! (vector 'collision-unregister link))
 	      (set! (link :destroy?) #t))
 	    (set! (link :angle) (prev-link :angle))
 	    (when (< 8 dist)
@@ -656,38 +663,49 @@
       (set! (snake :links) (filter (lambda (l) (not (l :destroy?))) (snake :links)))
       ))
 
+  (define (make-snake-link tail?)
+    (hash-table
+     :type :link
+     :enemy-type :snake-link
+     :x 0
+     :y 0
+     :radius 8
+     :angle 0
+     :sprite (if tail? 310 309)
+     :hp 20))
+
+  (define (make-snake-head x y)
+    (hash-table
+     :type :link-head
+     :x x
+     :y y
+     :speed 0
+     :radius 8
+     :angle 0
+     :sprite 308))
+
+  (define (make-snake x y target)
+    (define links (list (make-snake-link #t)))
+    (for (i 0 20)
+	 (set! links (cons (make-snake-link #f) links)))
+    (hash-table
+     :type :boss
+     :update update-snake
+     :render render-snake
+     :target target
+     :links (cons (make-snake-head x y) links)))
+  
+
   (define (damage-enemy! e amount)
     (if (e :hit-debounce)
 	#f
 	(begin 
 	  (set! (e :hp) (- (e :hp) amount))
 	  (set! (e :hit-debounce) 8)
-	  (set! (e :white-flash?) #t))))
-
-  (on-collision!
-   :projectile :link
-   (lambda (a b)
-     (when (damage-enemy! b (a :damage))
-       (set! (a :destroy?) #t))))
-
-  (on-collision!
-   :weapon :link
-   (lambda (w e)
-     (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
-
-  (on-collision!
-   :projectile :enemy
-   (lambda (a b)
-     (when (damage-enemy! b (a :damage))
-       (set! (a :destroy?) #t))))
-
-  (on-collision!
-   :weapon :enemy
-   (lambda (w e)
-     (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage))))))
+	  (set! (e :white-flash?) #t)))))
 
 (module gem-module
-  (import physics)
+  (import geometry)
   (define (make-xp-orb x y)
     (vector x y 259))
 
@@ -767,31 +785,6 @@
 	       (sv 2 2) (sv 2 3)
 	       (sv 3 2) (sv 3 3) 0 key)))
 
-(module entity-helpers
-  (define (update-hit-debounce e)
-    (when (and (e :hit-debounce) )
-      (if (< 0 (e :hit-debounce))
-	  (set! (e :hit-debounce) (- (e :hit-debounce) 1)) 
-	  (begin 
-	    (set! (e :hit-debounce) #f)
-	    (set! (e :white-flash?) #f)))))
-
-  (define (update-duration e)
-      (when (e :duration)
-	(set! (e :duration) (- (e :duration) 1))
-	(when (<= (e :duration) 0)
-	  (set! (e :destroy?) #t))))
-
-  (define (update-time e)
-    (when (e :time)
-      (set! (e :time) (+ (e :time) 1))))
-
-  (define (update-direction e)
-    (when (e :direction)
-      (let* ((dir-x (car (e :direction)))
-	     (dir-y (cdr (e :direction))))
-	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
-	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))))
 
 (module projectile
   (define (update-bullet e) #t)
@@ -857,7 +850,7 @@
 
 (module sword 
   (import utility)
-  (import vec2-module)
+  (import geometry)
   (define (sword-position cowboy t index)
     (let* ((sword-upgrades (filter (lambda (u) (eq? (u :id) :sword)) (cowboy :upgrades)))
 	   (sword-count (cowboy :sword-count))
@@ -887,13 +880,14 @@
 		:update update-sword
 		:render render-sword))
 
-  (define (update-sword-blueprint self entity-store)
+  (define (update-sword-blueprint self entity-store collision-world)
     (when (not (self :sword))
       (let* ((sword-count (length (filter (lambda (u) (eq? (u :id) :sword)) (self :player :upgrades))))
 	     (new-sword (make-sword (self :player) sword-count)))
 	(set! (self :player :sword-count) sword-count)
 	(set! (self :sword) new-sword)
-	(entity-store 'add! new-sword))))
+	(entity-store 'add! new-sword)
+	(collision-world 'register! new-sword))))
 
   (define (sword-blueprint)
       (hash-table
@@ -914,7 +908,7 @@
 
 (module revolver 
   (import projectile)
-  (import-as physics physics/)
+  (import geometry)
 
   (define (make-bullet x y direction speed damage)
     (make-projectile x y direction speed damage))
@@ -924,7 +918,7 @@
 	(let ((target (self :target)))
 	  (t80::spr 257 (camera-transform (- (target :x) 3) (- (target :y) 3)) 15 2 0 0 1 1))))
   
-  (define (update-revolver self entity-store)
+  (define (update-revolver self entity-store collision-world)
     (let ((cowboy (self :player)))
       (when (and (self :target) (self :target :destroy?))
 	(set! (self :target) #f))
@@ -932,15 +926,17 @@
 	  (set! (self :cooldown) (- (self :cooldown) 1 ))
 	  (let ((target (list->random (filter (lambda (e)
 						(and (or (eq? (e :type) :enemy) (eq? (e :type) :link))
-						     (physics/within? cowboy e (self :range))))
-					      (physics/nearby-entities (cowboy :x) (cowboy :y) (self :range))))))
+						     (within? cowboy e (self :range))))
+					      (collision-world 'nearby-entities (cowboy :x) (cowboy :y) (self :range))))))
 	    (set! (self :target) target)))
       
       (when (and (self :target)  (<= (self :cooldown) 0))
-	(entity-store 'add! (make-bullet (cowboy :x) (cowboy :y)
-					 (direction-to cowboy (self :target))
-					 40
-					 (+ (cowboy :extra-damage) (self :damage))))
+	(let ((bullet (make-bullet (cowboy :x) (cowboy :y)
+				   (direction-to cowboy (self :target))
+				   40
+				   (+ (cowboy :extra-damage) (self :damage)) )))
+	  (entity-store 'add! bullet)
+	  (collision-world 'register! bullet))
 	(set! (self :target) #f)
 	(set! (self :cooldown) (self :max-cooldown)))))
 
@@ -996,11 +992,12 @@
        (when (and (e :hp) (<= (e :hp) 0))
 	 (when (e :drop-xp)
 	   (add-event! (vector 'spawn-xp (e :x) (e :y) (e :drop-xp))))
-	 (set! (e :destroy?) #t))
+	 (set! (e :destroy?) #t)
+	 (add-event! (vector 'collision-unregister e)))
        (when (e :update)
 	 ((e :update) e)))
 
-      ((:projectile)
+      ((:projectile :boss)
        ((e :update) e))
 
       ((:weapon)
@@ -1087,7 +1084,6 @@
   (import camera)
   (import scene-module)
   (import level-up-scene)
-  (import-as physics physics/) 
   
   (define-constant cowboy-sprite 256)
 
@@ -1130,15 +1126,6 @@
     (when (<= (xp-needed (cowboy :level)) (cowboy :xp))
       (level-up! cowboy)))
 
-  (physics/on-collision! :xp :player
-		 (lambda (a cowboy)
-		   (set! (a :destroy?) #t)
-		   ))
-
-  (physics/on-collision! :player :enemy
-		 (lambda (a b)
-		   (damage-cowboy! a 1)))
-
   (define (move-cowboy-x! map cowboy pos?)
     (let* ((new-x ((if pos? + -) (cowboy :x) (* (cowboy :speed) 0.05)))
 	   (world-coords (real-coords->world (round new-x) (round (cowboy :y))))
@@ -1170,6 +1157,34 @@
 	     :hp 5
 	     :moving? #f)))
       cowboy)))
+
+(module collision-rules
+  (import enemies)
+  (import cowboy-module)
+
+  (define (register-collision-rules! collision-world)
+    (collision-world 'on-collision! :projectile :link
+		     (lambda (a b)
+		       (when (damage-enemy! b (a :damage))
+			 (set! (a :destroy?) #t)
+			 (add-event! (vector 'collision-unregister a)))))
+
+    (collision-world 'on-collision! :weapon :link
+      (lambda (w e) (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
+
+    (collision-world 'on-collision! :projectile :enemy
+		     (lambda (a b)
+		       (when (damage-enemy! b (a :damage))
+			 (set! (a :destroy?) #t)
+			 (add-event! (vector 'collision-unregister a)))))
+
+    (collision-world 'on-collision! :weapon :enemy
+      (lambda (w e) (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
+
+    (collision-world 'on-collision! :enemy :enemy push-apart!)
+
+    (collision-world 'on-collision! :player :enemy
+      (lambda (a b) (damage-cowboy! a 1)))))
 
 (module enemy-waves
   (import world)
@@ -1203,12 +1218,15 @@
  	   (new-y (+ (cowboy :y) (* radius (cdr dir)))))
       (cons new-x new-y))) 
 
-  (define (spawn-enemies entity-store cowboy t)
+  (define (spawn-enemies entity-store collision-world cowboy t)
     (let ((seconds (/ t 60)))
       (when (= 0 (modulo seconds 5))
 	(for-each (lambda (enemy)
-		    (let ((coords (get-random-position-radius-cowboy cowboy 128)))
-		      (entity-store 'add! ((enemy :make) (car coords) (cdr coords) cowboy))))
+		    (let* ((coords (get-random-position-radius-cowboy cowboy 128))
+			   (entity ((enemy :make) (car coords) (cdr coords) cowboy)))
+		      (entity-store 'add! entity)
+		      (when (entity :radius)
+			(collision-world 'register! entity))))
 		  (spend-budget (current-budget seconds) seconds))))))
 
 (module pause-menu
@@ -1290,7 +1308,8 @@
      :render (lambda () (render-game-over-scene)))))
 
 (module game-scene-module 
-  (import-as physics physics/)  
+  (import collision)  
+  (import collision-rules)
   (import entity-store)
   (import cowboy-module)
   (import level-up-scene)
@@ -1306,17 +1325,23 @@
 
   (define (make-game-scene)
     (set! game-time 0)
-    (define entity-store (make-entity-store))
     (define gems (list))
     (define game-map (generate-map 35)) 
-    (define update-collisions (physics/collision-system 16))
+    (define entity-store (make-entity-store))
+    (define collision-world (make-collision-world 16))
+    (register-collision-rules! collision-world)
     (define cowboy (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2)))
-    (define snake (make-snake 25 25 cowboy))
+    (collision-world 'register! cowboy)
+    (entity-store 'add! cowboy)
 
-    (for-each
-     (lambda (l)
-       (entity-store 'add! l))
-     (cdr (snake :links)))
+    (when (< 120 (/ game-time 60))
+      (define snake (make-snake 25 25 cowboy))
+      (entity-store 'add! snake)
+
+      (for-each
+       (lambda (l)
+	 (collision-world 'register! l))
+       (cdr (snake :links))))
 
     (define (update-gem' gem)
       (update-gem gem cowboy collect-xp!))
@@ -1324,7 +1349,6 @@
     (define (update-gems)
       (set! gems (filter update-gem' gems)))
 
-    (entity-store 'add! cowboy)
     (set! (*camera* :x) (cowboy :x))
     (set! (*camera* :y) (cowboy :y))
 
@@ -1344,14 +1368,10 @@
     (define (update)
       (when (< game-time 3)
 	(level-up! cowboy))
-      (for-each (lambda (e)
-		  (when (e :destroy?)
-		    (physics/forget! e))) (entity-store))
       (entity-store 'remove-destroyed!)
       (hash-table-set! *camera* :target-x (cowboy :x))
       (hash-table-set! *camera* :target-y (cowboy :y))
       (update-camera!)
-      (update-snake snake)
 
       (set! game-time (+ 1 game-time))
       (when (<= (cowboy :hp) 0)
@@ -1362,22 +1382,23 @@
 			  (lambda ()
 			    (swap-below! (make-main-menu-scene)))
 			  40))))))
-      (spawn-enemies entity-store cowboy game-time)
+      (spawn-enemies entity-store collision-world cowboy game-time)
       (for-each (lambda (e) (update-entity e game-time)) (entity-store))
 
       (for-each
        (lambda (upgrade)
 	 (when (upgrade :update)
-	   ((upgrade :update) upgrade entity-store)))
+	   ((upgrade :update) upgrade entity-store collision-world)))
        (cowboy :upgrades))
 
+      (collision-world 'resolve!)
+
       (update-gems)
-      (update-collisions (entity-store))
 
       (process-events
        (lambda (event)
 	 (case (event 0)
-	   ((forget-entity) (physics/forget! (event 1)))
+	   ((collision-unregister) (collision-world 'unregister! (event 1)))
 	   ((spawn-xp) (set! gems (cons (make-xp-orb (event 1) (event 2)) gems)))
 	   ((spawn-scarab) (entity-store 'add! (make-scarab (event 1) (event 2) (event 3))))))))
 
@@ -1391,13 +1412,11 @@
 	 (case (e :type)
 	   ((:enemy)
 	    (render-entity e))
-	   ((:projectile :weapon)
+	   ((:projectile :weapon :boss)
 	    ((e :render) e))))
        (entity-store))
 
       (for-each render-gem gems)
-
-      (render-snake snake)
 
       (for-each
        (lambda (upgrade)
