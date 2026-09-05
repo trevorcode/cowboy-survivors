@@ -120,35 +120,13 @@
        lst)
       (reverse result))) 
 
-  (define (find predicate lst)
-    (let loop ((lst lst))
-      (if (null? lst)
-	  #f
-	  (let ((element (car lst)))
-	    (if (predicate element)
-		element
-		(loop (cdr lst)))))))
-
   (define (list->random lst)
     (if (null? lst)
 	#f
 	(let ((len (length lst)))
 	  (list-ref lst (random len)))))
 
-  (define (all predicate lst)
-    (cond
-     ((null? lst) #t)
-     ((not (predicate (car lst))) #f)
-     (else (all predicate (cdr lst)))))
-
   (define (id x) x)
-
-  (define (remove-duplicates lst)
-    (cond ((null? lst) '())
-	  ((member (car lst) (cdr lst))
-	   (remove-duplicates (cdr lst)))
-	  (else
-	   (cons (car lst) (remove-duplicates (cdr lst))))))
 
   (define (range n)
     (do ((i 0 (+ i 1))
@@ -157,16 +135,6 @@
 
   (define (lerp progress start end)
     (+ start (* progress (- end start))))
-
-  (define (merge-hash-table-into! a b f)
-    (for-each
-     (lambda (entry)
-       (let ((key (car entry)))
-	 (if (a key)
-	     (set! (a key) (f (a key) (b key)))
-	     (set! (a key) (b key)))))
-     b)
-    a)
 
   (define (ease-out-cubic p) (let ((f (- p 1))) (+ 1 (* f f f))))
   (define (ease-in-cubic p) (* p p p))
