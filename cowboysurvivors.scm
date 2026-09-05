@@ -112,14 +112,13 @@
 
 (module utility 
   (define (filter predicate lst)
-      (let loop ((lst lst)
-		 (result '()))
-	(if (null? lst)
-	    (reverse result)
-	    (let ((element (car lst)))
-	      (if (predicate element)
-		  (loop (cdr lst) (cons element result))
-		  (loop (cdr lst) result))))))
+    (let ((result '()))
+      (for-each
+       (lambda (e)
+	 (when (predicate e)
+	   (set! result (cons e result))))
+       lst)
+      (reverse result))) 
 
   (define (find predicate lst)
     (let loop ((lst lst))
@@ -651,6 +650,7 @@
 	  (update-hit-debounce link)
 	  (when (<= (link :hp) 0)
 	    (add-event! (vector 'collision-unregister link))
+	    (add-event! (vector 'spawn-xp (link :x) (link :y) (link :drop-xp)))
 	    (set! (link :destroy?) #t))
 	  (set! (link :angle) (prev-link :angle))
 	  (when (< 8 dist)
@@ -669,6 +669,7 @@
      :y 0
      :radius 8
      :angle 0
+     :drop-xp 1
      :sprite (if tail? 310 309)
      :hp 40))
 
@@ -844,27 +845,27 @@
       (set! (cowboy :hp) (+ 1 (cowboy :hp)))
       new-heart)))
 
-(module sword 
+(module playing-card 
   (import utility)
   (import geometry)
-  (define (sword-position cowboy t index)
-    (let* ((sword-upgrades (filter (lambda (u) (eq? (u :id) :sword)) (cowboy :upgrades)))
-	   (sword-count (cowboy :sword-count))
-	   (angle (+ (* t 0.05) (* index (/ (* 2 pi) sword-count))))
+  (define (playing-card-position cowboy t index)
+    (let* ((playing-card-upgrades (filter (lambda (u) (eq? (u :id) :playing-card)) (cowboy :upgrades)))
+	   (playing-card-count (cowboy :playing-card-count))
+	   (angle (+ (* t 0.05) (* index (/ (* 2 pi) playing-card-count))))
 	   (dir-vector (vec2 (cos angle) (sin angle)))
 	   (cowboy-vec (vec2 (cowboy :x) (cowboy :y)))
 	   (new-position (vec2-scale dir-vector 32))) 
       (vec2-add new-position cowboy-vec)))
 
-  (define (update-sword sword game-time)
-    (define position (sword-position (sword :cowboy) game-time (sword :index)))
-    (set! (sword :x) (floor (vec2-x position)))
-    (set! (sword :y) (floor (vec2-y position))))
+  (define (update-playing-card playing-card game-time)
+    (define position (playing-card-position (playing-card :cowboy) game-time (playing-card :index)))
+    (set! (playing-card :x) (floor (vec2-x position)))
+    (set! (playing-card :y) (floor (vec2-y position))))
 
-  (define (render-sword self)
+  (define (render-playing-card self)
     (t80::spr (self :sprite) (camera-transform (self :x) (self :y)) 15 1 0 0 1 1))
   
-  (define (make-sword cowboy index)
+  (define (make-playing-card cowboy index)
     (hash-table :x (cowboy :x)
 		:y (cowboy :y)
 		:cowboy cowboy
@@ -873,34 +874,34 @@
 		:sprite 263
 		:index index
 		:damage 1
-		:update update-sword
-		:render render-sword))
+		:update update-playing-card
+		:render render-playing-card))
 
-  (define (update-sword-blueprint self entity-store collision-world)
-    (when (not (self :sword))
-      (let* ((sword-count (length (filter (lambda (u) (eq? (u :id) :sword)) (self :player :upgrades))))
-	     (new-sword (make-sword (self :player) sword-count)))
-	(set! (self :player :sword-count) sword-count)
-	(set! (self :sword) new-sword)
-	(entity-store 'add! new-sword)
-	(collision-world 'register! new-sword))))
+  (define (update-playing-card-blueprint self entity-store collision-world)
+    (when (not (self :playing-card))
+      (let* ((playing-card-count (length (filter (lambda (u) (eq? (u :id) :playing-card)) (self :player :upgrades))))
+	     (new-playing-card (make-playing-card (self :player) playing-card-count)))
+	(set! (self :player :playing-card-count) playing-card-count)
+	(set! (self :playing-card) new-playing-card)
+	(entity-store 'add! new-playing-card)
+	(collision-world 'register! new-playing-card))))
 
-  (define (sword-blueprint)
+  (define (playing-card-blueprint)
       (hash-table
-       :id :sword
+       :id :playing-card
        :type :upgrade
-       :name "Sword"
+       :name "Texas \nHold-em"
        :sprite 263
        :range 32 
-       :sword #f
+       :playing-card #f
        :damage 1 
        :stats '(:damage)
-       :update update-sword-blueprint))
+       :update update-playing-card-blueprint))
 
-  (define (make-sword-gear cowboy)
-    (let ((new-sword-blueprint (sword-blueprint)))
-      (set! (new-sword-blueprint :player) cowboy)
-      new-sword-blueprint)))
+  (define (make-playing-card-gear cowboy)
+    (let ((new-playing-card-blueprint (playing-card-blueprint)))
+      (set! (new-playing-card-blueprint :player) cowboy)
+      new-playing-card-blueprint)))
 
 (module revolver 
   (import projectile)
@@ -1005,7 +1006,7 @@
   (import extra-heart)
   (import speed-item)
   (import damage-item)
-  (import sword)
+  (import playing-card)
 
   (define *gear-catalog*
     (hash-table
@@ -1013,7 +1014,7 @@
      :heart (cons (heart-blueprint) make-extra-heart)
      :speed-item (cons (speed-blueprint) make-speed-item)
      :damage-item (cons (damage-blueprint) make-damage-item)
-     :sword (cons (sword-blueprint) make-sword-gear))) 
+     :playing-card (cons (playing-card-blueprint) make-playing-card-gear))) 
 
   (define (randomize-list lst)
     (map cdr
@@ -1055,8 +1056,8 @@
 	      (let ((display-name (case stat
 				    ((:max-cooldown) "cooldown")
 				    (else (symbol->string (keyword->symbol stat))))))
-		(t80::print display-name (+ 2 card-start-x) (+ 30 (* j 10) card-start-y) 0 #t 1 #t)
-		(t80::print (object->string (option stat)) (+ 42 card-start-x) (+ 30 (* j 10) card-start-y) 0)))
+		(t80::print display-name (+ 2 card-start-x) (+ 36 (* j 10) card-start-y) 0 #t 1 #t)
+		(t80::print (object->string (option stat)) (+ 42 card-start-x) (+ 36 (* j 10) card-start-y) 0)))
 	    (option :stats)
 	    (range (length (option :stats)))))))
      options
@@ -1264,8 +1265,8 @@
 	 (let ((display-name (case stat
 			       ((:max-cooldown) "cooldown")
 			       (else (symbol->string (keyword->symbol stat))))))
-	   (t80::print display-name (+ 2 start-x) (+ 30 (* j 10) start-y) 0 #t 1 #t)
-	   (t80::print (object->string (upgrade stat)) (+ 42 start-x) (+ 30 (* j 10) start-y) 0)))
+	   (t80::print display-name (+ 2 start-x) (+ 36 (* j 10) start-y) 0 #t 1 #t)
+	   (t80::print (object->string (upgrade stat)) (+ 42 start-x) (+ 36 (* j 10) start-y) 0)))
        (upgrade :stats)
        (range (length (upgrade :stats))))))
 
@@ -1484,8 +1485,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.12" 5 5 0)
-    (t80::print "Cowboy Survivors v0.12"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.13" 5 5 0)
+    (t80::print "Cowboy Survivors v0.13" (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
@@ -1560,7 +1561,7 @@
 ;; 004:f222ffff321121121211211172223fff77733fff777fffff77ffffff77ffffff
 ;; 005:8fff8fff88ff88fff88ff88fff88ff88ff88ff88f88ff88f88ff88ff8fff8fff
 ;; 006:ffffff99fffff999ffff999f9ff999ff66999ffff669ffff6666ffff66f69fff
-;; 007:fff43ffffff43ffffff43ffffff43ffffff44ffff888888ffff67ffffff67fff
+;; 007:f000000ff044440ff049440ff044440ff044440ff044940ff044440ff000000f
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
 ;; 036:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
