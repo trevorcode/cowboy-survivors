@@ -575,6 +575,7 @@
       (when (= 0 (modulo (e :time) 240))
 	(add-event! (vector 'spawn-scarab (e :x) (e :y) (e :target)))
 	(add-event! (vector 'spawn-scarab (e :x) (e :y) (e :target)))
+	(add-event! (vector 'spawn-scarab (e :x) (e :y) (e :target)))
 	(add-event! (vector 'spawn-scarab (e :x) (e :y) (e :target))))))
 
   (define (make-scarab-queen x y target)
@@ -672,7 +673,7 @@
      :radius 8
      :angle 0
      :sprite (if tail? 310 309)
-     :hp 20))
+     :hp 40))
 
   (define (make-snake-head x y)
     (hash-table
@@ -951,7 +952,7 @@
        :max-cooldown 120 
        :range 64 
        :target #f
-       :damage 7 
+       :damage 9 
        :stats '(:max-cooldown :range :damage)
        :update update-revolver
        :render render-revolver))
@@ -1196,7 +1197,7 @@
   (define enemy-types
     (list
      (hash-table :id :tumbleweed :cost 1 :min-time 0 :make make-tumbleweed)
-     (hash-table :id :big-tumbleweed :cost 2 :min-time 40 :make make-big-tumbleweed)
+     (hash-table :id :big-tumbleweed :cost 3 :min-time 40 :make make-big-tumbleweed)
      (hash-table :id :scarab-queen :cost 7 :min-time 80 :make make-scarab-queen))) 
 
   (define (available-enemies elapsed)
@@ -1379,8 +1380,9 @@
 			  (lambda ()
 			    (swap-below! (make-main-menu-scene)))
 			  40))))))
-      (when (and (< 0 (/ t 60)) (not snake))
-	(set! snake (make-snake 25 25 cowboy))
+
+      (when (and (<= 150 (quotient game-time 60)) (= 0 (modulo game-time 50)))
+	(set! snake (make-snake 0 0 cowboy))
 	(entity-store 'add! snake)
 	
 	(for-each
@@ -1407,7 +1409,7 @@
 	   ((spawn-xp) (set! gems (cons (make-xp-orb (event 1) (event 2)) gems)))
 	   ((spawn-scarab)
 	    (let ((scarab (make-scarab (event 1) (event 2) (event 3))))
-	      (collision-world 'register scarab)
+	      (collision-world 'register! scarab)
 	      (entity-store 'add! scarab)))))))
 
     (define (render)
@@ -1486,8 +1488,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.9" 5 5 0)
-    (t80::print "Cowboy Survivors v0.9"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.10" 5 5 0)
+    (t80::print "Cowboy Survivors v0.10"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
