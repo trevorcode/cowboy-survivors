@@ -1381,7 +1381,7 @@
 			    (swap-below! (make-main-menu-scene)))
 			  40))))))
 
-      (when (and (<= 150 (quotient game-time 60)) (= 0 (modulo game-time 50)))
+      (when (and (<= 150 (quotient game-time 60)) (= 0 (modulo (/ game-time 60) 50)))
 	(set! snake (make-snake 0 0 cowboy))
 	(entity-store 'add! snake)
 	
@@ -1488,8 +1488,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.10" 5 5 0)
-    (t80::print "Cowboy Survivors v0.10"  (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.12" 5 5 0)
+    (t80::print "Cowboy Survivors v0.12"  (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
