@@ -20,6 +20,18 @@
 (define-macro (import-as module prefix)
   `(apply varlet (curlet) (module/prefix ,module ',prefix)))
 
+(define (current-time)
+  (*s7* 'cpu-time))
+
+(define-macro (time name . body)
+  (let ((start (gensym))
+	(end (gensym)))
+    `(begin
+       (let ((,start (current-time)))
+	 ,@body
+	 (let ((,end (current-time)))
+	   (t80::trace (format #f "Time for ~S is ~S" ,name (- ,end ,start))))))))
+
 (define-macro (define-record-type type-name constructor-spec predicate-name . field-specs)
   (let* ((ctor-name (car constructor-spec))
      (ctor-fields (cdr constructor-spec))
@@ -373,7 +385,9 @@
       (set! (grid key) (cons e (or (grid key) '()))))
 
     (define (bucket-remove! key e)
-      (when (grid key) (set! (grid key) (remove-entity (grid key) e))))
+      (when (grid key)
+	(let ((remaining (remove-entity (grid key) e)))
+	  (set! (grid key) (if (null? remaining) #f remaining)))))
 
     (define (register! e)
       (unless (memq e members)
@@ -418,15 +432,13 @@
 	    (cy (floor (/ y cell-size)))
 	    (cell-radius (max 1 (ceiling (/ radius cell-size))))
 	    (buckets '()))
-	(let loop-dx ((dx (- cell-radius)))
-	  (when (<= dx cell-radius)
-	    (let loop-dy ((dy (- cell-radius)))
-	      (when (<= dy cell-radius)
-		(let ((bucket (grid (cell-key (* cell-size (+ cx dx)) (* cell-size (+ cy dy))))))
-		  (when (pair? bucket)
-		    (set! buckets (cons bucket buckets))))
-		(loop-dy (+ dy 1))))
-	    (loop-dx (+ dx 1))))
+	(do ((dx (- cell-radius) (+ dx 1)))
+	    ((= dx cell-radius))
+	  (do ((dy (- cell-radius) (+ dy 1)))
+	      ((= dy cell-radius))
+	    (let ((bucket (grid (cell-key (* cell-size (+ cx dx)) (* cell-size (+ cy dy))))))
+	      (when (pair? bucket)
+		(set! buckets (cons bucket buckets))))))
 	(apply append buckets)))
 
     (define (find-and-dispatch-collisions)
@@ -436,11 +448,10 @@
 		(bucket (cdr grid-entry))
 		(cx (floor (/ key 100000)))
 		(cy (- key (* cx 100000))))
-	   (let loop ((lst bucket))
-	     (when (pair? lst)
-	       (let ((a (car lst)))
-		 (for-each (lambda (b) (check-pair! a b)) (cdr lst)))
-	       (loop (cdr lst))))
+	   (do ((lst bucket (cdr lst)))
+	       ((null? lst))
+	     (let ((a (car lst)))
+	       (for-each (lambda (b) (check-pair! a b)) (cdr lst))))
 
 	   (for-each
             (lambda (offset)
@@ -597,16 +608,15 @@
      :hp 1))
 
   (define (render-snake snake)
-    (let loop ((links (snake :links)))
-      (when (pair? links)
-	(let ((link (car links)))
-	  (if (link :white-flash?)
-	      (begin 
-		(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) 4))
-		(draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15)
-		(for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
-	      (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15))
-	  (loop (cdr links))))))
+    (for-each
+     (lambda (link)
+       (if (link :white-flash?)
+	   (begin 
+	     (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) 4))
+	     (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15)
+	     (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
+	   (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15)))
+     (snake :links)))
 
   (define (update-snake snake)
     (let* ((head (car (snake :links)))
@@ -631,27 +641,25 @@
       (when (null? (cdr (snake :links)))
 	(set! (snake :destroy?) #t))
 
-      (let loop ((links (cdr (snake :links)))
-		 (prev-link head))
-	(when (pair? links)
-	  (let* ((link (car links))
-		 (dx (- (prev-link :x) (link :x)))
-		 (dy (- (prev-link :y) (link :y)))
-		 (dist (sqrt (+ (* dx dx) (* dy dy)))))
-	    (update-hit-debounce link)
-	    (when (<= (link :hp) 0)
-	      (add-event! (vector 'collision-unregister link))
-	      (set! (link :destroy?) #t))
-	    (set! (link :angle) (prev-link :angle))
-	    (when (< 8 dist)
-	      (set! (link :x) (+ (link :x) (* (/ dx dist)
-					      (- dist 8))))
-	      (set! (link :y) (+ (link :y) (* (/ dy dist)
-					      (- dist 8)))))
-	    (loop (cdr links) link))))
+      (do ((links (cdr (snake :links)) (cdr links))
+	   (prev-link head (car links)))
+	  ((null? links))
+	(let* ((link (car links))
+	       (dx (- (prev-link :x) (link :x)))
+	       (dy (- (prev-link :y) (link :y)))
+	       (dist (sqrt (+ (* dx dx) (* dy dy)))))
+	  (update-hit-debounce link)
+	  (when (<= (link :hp) 0)
+	    (add-event! (vector 'collision-unregister link))
+	    (set! (link :destroy?) #t))
+	  (set! (link :angle) (prev-link :angle))
+	  (when (< 8 dist)
+	    (set! (link :x) (+ (link :x) (* (/ dx dist)
+					    (- dist 8))))
+	    (set! (link :y) (+ (link :y) (* (/ dy dist)
+					    (- dist 8)))))))
 
-      (set! (snake :links) (filter (lambda (l) (not (l :destroy?))) (snake :links)))
-      ))
+      (set! (snake :links) (filter (lambda (l) (not (l :destroy?))) (snake :links)))))
 
   (define (make-snake-link tail?)
     (hash-table
@@ -1326,8 +1334,6 @@
     (entity-store 'add! cowboy)
     (define snake #f)
 
-    
-
     (define (update-gem' gem)
       (update-gem gem cowboy collect-xp!))
 
@@ -1354,6 +1360,7 @@
       (when (< game-time 3)
 	(level-up! cowboy))
       (entity-store 'remove-destroyed!)
+
       (hash-table-set! *camera* :target-x (cowboy :x))
       (hash-table-set! *camera* :target-y (cowboy :y))
       (update-camera!)
@@ -1377,6 +1384,7 @@
 	   (collision-world 'register! l))
 	 (cdr (snake :links))))
       (spawn-enemies entity-store collision-world cowboy game-time)
+
       (for-each (lambda (e) (update-entity e game-time)) (entity-store))
 
       (for-each
@@ -1384,6 +1392,7 @@
 	 (when (upgrade :update)
 	   ((upgrade :update) upgrade entity-store collision-world)))
        (cowboy :upgrades))
+
 
       (collision-world 'resolve!)
 
