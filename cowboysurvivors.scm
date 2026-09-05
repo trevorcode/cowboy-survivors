@@ -1181,7 +1181,10 @@
     (collision-world 'on-collision! :weapon :enemy
       (lambda (w e) (damage-enemy! e (+ (w :cowboy :extra-damage) (w :damage)))))
 
-    (collision-world 'on-collision! :enemy :enemy push-apart!)
+    ;;(collision-world 'on-collision! :enemy :enemy push-apart!)
+
+    (collision-world 'on-collision! :player :link
+      (lambda (a b) (damage-cowboy! a 1)))
 
     (collision-world 'on-collision! :player :enemy
       (lambda (a b) (damage-cowboy! a 1)))))
@@ -1333,15 +1336,9 @@
     (define cowboy (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2)))
     (collision-world 'register! cowboy)
     (entity-store 'add! cowboy)
+    (define snake #f)
 
-    (when (< 120 (/ game-time 60))
-      (define snake (make-snake 25 25 cowboy))
-      (entity-store 'add! snake)
-
-      (for-each
-       (lambda (l)
-	 (collision-world 'register! l))
-       (cdr (snake :links))))
+    
 
     (define (update-gem' gem)
       (update-gem gem cowboy collect-xp!))
@@ -1382,6 +1379,14 @@
 			  (lambda ()
 			    (swap-below! (make-main-menu-scene)))
 			  40))))))
+      (when (and (< 0 (/ t 60)) (not snake))
+	(set! snake (make-snake 25 25 cowboy))
+	(entity-store 'add! snake)
+	
+	(for-each
+	 (lambda (l)
+	   (collision-world 'register! l))
+	 (cdr (snake :links))))
       (spawn-enemies entity-store collision-world cowboy game-time)
       (for-each (lambda (e) (update-entity e game-time)) (entity-store))
 
@@ -1400,7 +1405,10 @@
 	 (case (event 0)
 	   ((collision-unregister) (collision-world 'unregister! (event 1)))
 	   ((spawn-xp) (set! gems (cons (make-xp-orb (event 1) (event 2)) gems)))
-	   ((spawn-scarab) (entity-store 'add! (make-scarab (event 1) (event 2) (event 3))))))))
+	   ((spawn-scarab)
+	    (let ((scarab (make-scarab (event 1) (event 2) (event 3))))
+	      (collision-world 'register scarab)
+	      (entity-store 'add! scarab)))))))
 
     (define (render)
       (t80::cls 0)
