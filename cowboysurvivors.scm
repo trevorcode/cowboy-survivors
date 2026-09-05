@@ -342,7 +342,13 @@
 
   (define (make-collision-world cell-size)
     (define grid (hash-table))
-    (define members '())
+    (define next-id
+      (let ((id 0))
+	(lambda ()
+	  (set! id (+ id 1))
+	  id))) 
+
+    (define members (hash-table))
     (define handlers (hash-table))
 
     (define (cell-key x y)
@@ -357,21 +363,24 @@
 	  (set! (grid key) (if (null? remaining) #f remaining)))))
 
     (define (register! e)
-      (unless (memq e members)
-	(set! members (cons e members))
+      (unless (e :collision-id)
+	(set! (e :collision-id) (next-id))
+	(hash-table-set! members (e :collision-id) e)
 	(let ((key (cell-key (e :x) (e :y))))
 	  (set! (e :collision-key) key)
 	  (bucket-add! key e))))
 
     (define (unregister! e)
-      (set! members (remove-entity members e))
+      (hash-table-set! members (e :collision-id) #f)
+      (set! (e :collision-id) #f)
       (let ((key (e :collision-key)))
 	(when key (bucket-remove! key e))
 	(set! (e :collision-key) #f)))
 
-    (define (update-membership! e)
-      (let ((new-key (cell-key (e :x) (e :y)))
-	    (old-key (e :collision-key)))
+    (define (update-membership! mem)
+      (let* ((e (cdr mem))
+	     (new-key (cell-key (e :x) (e :y)))
+	     (old-key (e :collision-key)))
 	(when (not (equal? old-key new-key))
 	  (when old-key (bucket-remove! old-key e))
 	  (bucket-add! new-key e)
@@ -821,8 +830,7 @@
   (import utility)
   (import geometry)
   (define (playing-card-position cowboy t index)
-    (let* ((playing-card-upgrades (filter (lambda (u) (eq? (u :id) :playing-card)) (cowboy :upgrades)))
-	   (playing-card-count (cowboy :playing-card-count))
+    (let* ((playing-card-count (cowboy :playing-card-count))
 	   (angle (+ (* t 0.05) (* index (/ (* 2 pi) playing-card-count))))
 	   (dir-vector (vec2 (cos angle) (sin angle)))
 	   (cowboy-vec (vec2 (cowboy :x) (cowboy :y)))
@@ -1453,8 +1461,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.13" 5 5 0)
-    (t80::print "Cowboy Survivors v0.13" (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.14" 5 5 0)
+    (t80::print "Cowboy Survivors v0.14" (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
@@ -1474,9 +1482,9 @@
     
     (hash-table
      :input (lambda ()
-	      (when (t80::btnp 1) (set! selected (modulo (+ selected 1) 1)))
-	      (when (t80::btnp 4) (set! selected (modulo (- selected 1) 1)))
-	      (when (t80::btnp 5)
+	      (when (t80::btnp 0) (set! selected (modulo (+ selected 1) 1)))
+	      (when (t80::btnp 1) (set! selected (modulo (- selected 1) 1)))
+	      (when (t80::btnp 4)
 		(((list-ref menu-options selected) :fn))))
      :update (lambda () #t)
      :render (lambda () (render-main-menu-scene menu-options selected)))))
