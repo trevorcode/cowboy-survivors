@@ -514,6 +514,7 @@
      :target target
      :update enemy-follow-player
      :sprite '(304 305)
+     :render render-entity
      :drop-xp 1
      :hp 10))
 
@@ -528,6 +529,7 @@
      :target target
      :update enemy-follow-player
      :scale 2
+     :render render-entity
      :sprite '(304 305)
      :drop-xp 1
      :hp 20))
@@ -555,6 +557,7 @@
      :time 0
      :target target
      :update scarab-queen-update
+     :render render-entity
      :scale 1
      :sprite '((320 2 2) (322 2 2))
      :drop-xp 4
@@ -570,6 +573,7 @@
      :time 0
      :target target
      :update enemy-follow-player
+     :render render-entity
      :scale 1
      :sprite 306 
      :hp 1))
@@ -1120,6 +1124,7 @@
 	     :upgrades (list)
 	     :update (lambda (x y) #f)
 	     :hp 5
+	     :render render-cowboy
 	     :moving? #f)))
       cowboy)))
 
@@ -1195,7 +1200,16 @@
 		      (entity-store 'add! entity)
 		      (when (entity :radius)
 			(collision-world 'register! entity))))
-		  (spend-budget (current-budget seconds) seconds))))))
+		  (spend-budget (current-budget seconds) seconds)))
+
+      (when (and (<= 150 seconds) (= 0 (modulo seconds 50)))
+	(let ((snake (make-snake 0 0 cowboy)))
+	  (entity-store 'add! snake)
+	  
+	  (for-each
+	   (lambda (l)
+	     (collision-world 'register! l))
+	   (cdr (snake :links))))))))
 
 (module pause-menu
   (import scene-module)
@@ -1301,7 +1315,6 @@
     (define cowboy (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2)))
     (collision-world 'register! cowboy)
     (entity-store 'add! cowboy)
-    (define snake #f)
 
     (define (update-gem' gem)
       (update-gem gem cowboy collect-xp!))
@@ -1334,7 +1347,7 @@
       (hash-table-set! *camera* :target-y (cowboy :y))
       (update-camera!)
 
-      (set! game-time (+ 1 game-time))
+      
       (when (<= (cowboy :hp) 0)
 	(push-scene! (make-game-over-scene
 		      (lambda ()
@@ -1344,14 +1357,6 @@
 			    (swap-below! (make-main-menu-scene)))
 			  40))))))
 
-      (when (and (<= 150 (quotient game-time 60)) (= 0 (modulo (/ game-time 60) 50)))
-	(set! snake (make-snake 0 0 cowboy))
-	(entity-store 'add! snake)
-	
-	(for-each
-	 (lambda (l)
-	   (collision-world 'register! l))
-	 (cdr (snake :links))))
       (spawn-enemies entity-store collision-world cowboy game-time)
 
       (for-each (lambda (e) (update-entity e game-time)) (entity-store))
@@ -1361,7 +1366,6 @@
 	 (when (upgrade :update)
 	   ((upgrade :update) upgrade entity-store collision-world)))
        (cowboy :upgrades))
-
 
       (collision-world 'resolve!)
 
@@ -1375,20 +1379,17 @@
 	   ((spawn-scarab)
 	    (let ((scarab (make-scarab (event 1) (event 2) (event 3))))
 	      (collision-world 'register! scarab)
-	      (entity-store 'add! scarab)))))))
+	      (entity-store 'add! scarab))))))
+
+      (set! game-time (+ 1 game-time)))
 
     (define (render)
       (t80::cls 0)
       (map-render game-map *camera*)
-      (render-cowboy cowboy)
 
       (for-each 
        (lambda (e)
-	 (case (e :type)
-	   ((:enemy)
-	    (render-entity e))
-	   ((:projectile :weapon :boss)
-	    ((e :render) e))))
+	 ((e :render) e))
        (entity-store))
 
       (for-each render-gem gems)
@@ -1398,7 +1399,6 @@
 	 (when (upgrade :render)
 	   ((upgrade :render) upgrade)))
        (cowboy :upgrades))
-     
 
       (render-hp (cowboy :hp))
       (render-time game-time)
