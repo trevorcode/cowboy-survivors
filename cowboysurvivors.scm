@@ -110,6 +110,48 @@
 	   (set! *coroutines* (cons c *coroutines*))))
        to-run))))
 
+(module pool
+  (define (make-pool size)
+    (let ((free-stack (make-vector size 0))
+	  (in-use (make-vector size #f)))
+      (do ((i 0 (+ i 1))) ((= i size))
+	(vector-set! free-stack i i))
+      (vector free-stack in-use size)))
+  
+  (define (pool-free-stack p) (vector-ref p 0))
+  (define (pool-in-use p) (vector-ref p 1))
+  (define (pool-top p) (vector-ref p 2))
+  (define (set-pool-top! p v) (vector-set! p 2 v))
+  
+  (define (pool-add! p obj)
+    (let ((top (pool-top p)))
+      (if (= top 0)
+	  #f
+	  (let* ((free-stack (pool-free-stack p))
+		 (new-top (- top 1))
+		 (i (vector-ref free-stack new-top)))
+	    (set-pool-top! p new-top)
+	    (vector-set! (pool-in-use p) i obj)
+	    i))))
+  
+  (define (pool-remove! p i)
+    (when (vector-ref (pool-in-use p) i)
+      (vector-set! (pool-in-use p) i #f)
+      (let* ((top (pool-top p))
+	     (free-stack (pool-free-stack p)))
+	(vector-set! free-stack top i)
+	(set-pool-top! p (+ top 1)))))
+  
+  (define (pool-count p)
+    (- (vector-length (pool-free-stack p)) (pool-top p)))
+  
+  (define (pool-for-each p f)
+    (let ((in-use (pool-in-use p)))
+      (do ((i 0 (+ i 1))) ((= i (length in-use)))
+	(let ((entity (vector-ref in-use i)))
+	  (when entity
+	    (f entity i)))))))
+
 (module utility 
   (define (filter predicate lst)
     (let ((result '()))
@@ -480,7 +522,33 @@
       (let* ((dir-x (car (e :direction)))
 	     (dir-y (cdr (e :direction))))
 	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
-	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))))
+	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10)))))))
+
+  (define (update-entity e game-time object-pool idx)
+    (when e
+      (update-duration e)
+      (update-direction e)
+      (update-time e)
+      (update-hit-debounce e)
+      (when (e :destroy?)
+	(pool-remove! object-pool idx))
+      
+      (case (e :type)
+	((:enemy)
+	 (when (and (e :hp) (<= (e :hp) 0))
+	   (when (e :drop-xp)
+	     (add-event! (vector 'spawn-xp (e :x) (e :y) (e :drop-xp))))
+	   (set! (e :destroy?) #t)
+	   (add-event! (vector 'collision-unregister e)))
+	 (when (e :update)
+	   ((e :update) e)))
+
+	((:projectile :boss)
+	 ((e :update) e))
+
+	((:weapon)
+	 ((e :update) e game-time)))))
+  )
 
 (module enemies 
   (import collision)
@@ -857,13 +925,13 @@
 		:update update-playing-card
 		:render render-playing-card))
 
-  (define (update-playing-card-blueprint self entity-store collision-world)
+  (define (update-playing-card-blueprint self object-pool collision-world)
     (when (not (self :playing-card))
       (let* ((playing-card-count (length (filter (lambda (u) (eq? (u :id) :playing-card)) (self :player :upgrades))))
 	     (new-playing-card (make-playing-card (self :player) playing-card-count)))
 	(set! (self :player :playing-card-count) playing-card-count)
 	(set! (self :playing-card) new-playing-card)
-	(entity-store 'add! new-playing-card)
+	(pool-add! object-pool new-playing-card)
 	(collision-world 'register! new-playing-card))))
 
   (define (playing-card-blueprint)
@@ -895,7 +963,7 @@
 	(let ((target (self :target)))
 	  (t80::spr 257 (camera-transform (- (target :x) 3) (- (target :y) 3)) 15 2 0 0 1 1))))
   
-  (define (update-revolver self entity-store collision-world)
+  (define (update-revolver self object-pool collision-world)
     (let ((cowboy (self :player)))
       (when (and (self :target) (self :target :destroy?))
 	(set! (self :target) #f))
@@ -912,7 +980,7 @@
 				   (direction-to cowboy (self :target))
 				   40
 				   (+ (cowboy :extra-damage) (self :damage)) )))
-	  (entity-store 'add! bullet)
+	  (pool-add! object-pool bullet)
 	  (collision-world 'register! bullet))
 	(set! (self :target) #f)
 	(set! (self :cooldown) (self :max-cooldown)))))
@@ -938,47 +1006,6 @@
       (set! (new-revolver :player) cowboy)
       new-revolver)))
 
-(module entity-store 
-  (import utility)
-  (import events)
-  (import-as entity-helpers eh/)  
-  
-  (define (make-entity-store)
-    (define entities (list))
-
-    (define (add! e)
-      (set! entities (cons e entities)))
-
-    (define (remove-destroyed!)
-      (set! entities (filter (lambda (e) (not (e :destroy?))) entities)))
-
-    (lambda* (action . args)
-      (case action
-	((add!) (add! (car args)))
-	((remove-destroyed!) (remove-destroyed!))
-	(else entities))))
-
-  (define (update-entity e game-time)
-    (eh/update-duration e)
-    (eh/update-direction e)
-    (eh/update-time e)
-    (eh/update-hit-debounce e)
-    
-    (case (e :type)
-      ((:enemy)
-       (when (and (e :hp) (<= (e :hp) 0))
-	 (when (e :drop-xp)
-	   (add-event! (vector 'spawn-xp (e :x) (e :y) (e :drop-xp))))
-	 (set! (e :destroy?) #t)
-	 (add-event! (vector 'collision-unregister e)))
-       (when (e :update)
-	 ((e :update) e)))
-
-      ((:projectile :boss)
-       ((e :update) e))
-
-      ((:weapon)
-       ((e :update) e game-time)))))
 
 (module level-up-scene
   (import scene-module)
@@ -1169,6 +1196,7 @@
 
 (module enemy-waves
   (import world)
+  (import pool)
   (import enemies) 
 
   (define enemy-types
@@ -1199,20 +1227,20 @@
  	   (new-y (+ (cowboy :y) (* radius (cdr dir)))))
       (cons new-x new-y))) 
 
-  (define (spawn-enemies entity-store collision-world cowboy t)
+  (define (spawn-enemies object-pool collision-world cowboy t)
     (let ((seconds (/ t 60)))
       (when (= 0 (modulo seconds 5))
 	(for-each (lambda (enemy)
 		    (let* ((coords (get-random-position-radius-cowboy cowboy 128))
 			   (entity ((enemy :make) (car coords) (cdr coords) cowboy)))
-		      (entity-store 'add! entity)
+		      (pool-add! object-pool entity)
 		      (when (entity :radius)
 			(collision-world 'register! entity))))
 		  (spend-budget (current-budget seconds) seconds)))
 
       (when (and (<= 150 seconds) (= 0 (modulo seconds 50)))
 	(let ((snake (make-snake 0 0 cowboy)))
-	  (entity-store 'add! snake)
+	  (pool-add! object-pool snake)
 	  
 	  (for-each
 	   (lambda (l)
@@ -1300,7 +1328,6 @@
 (module game-scene-module 
   (import collision)  
   (import collision-rules)
-  (import entity-store)
   (import cowboy-module)
   (import level-up-scene)
   (import ui-module)
@@ -1310,6 +1337,8 @@
   (import game-over-scene)
   (import pause-menu)
   (import gem-module)
+  (import pool)
+  (import events)
 
   (define game-time 0)
 
@@ -1317,12 +1346,12 @@
     (set! game-time 0)
     (define gems (list))
     (define game-map (generate-map 35)) 
-    (define entity-store (make-entity-store))
+    (define entity-pool (make-pool 1000))
     (define collision-world (make-collision-world 16))
     (register-collision-rules! collision-world)
     (define cowboy (make-cowboy (quotient (game-map :width) 2) (quotient (game-map :height) 2)))
     (collision-world 'register! cowboy)
-    (entity-store 'add! cowboy)
+    (pool-add! entity-pool cowboy)
 
     (define (update-gem' gem)
       (update-gem gem cowboy collect-xp!))
@@ -1349,7 +1378,6 @@
     (define (update)
       (when (< game-time 3)
 	(level-up! cowboy))
-      (entity-store 'remove-destroyed!)
 
       (hash-table-set! *camera* :target-x (cowboy :x))
       (hash-table-set! *camera* :target-y (cowboy :y))
@@ -1365,14 +1393,15 @@
 			    (swap-below! (make-main-menu-scene)))
 			  40))))))
 
-      (spawn-enemies entity-store collision-world cowboy game-time)
+      (spawn-enemies entity-pool collision-world cowboy game-time)
 
-      (for-each (lambda (e) (update-entity e game-time)) (entity-store))
+      (pool-for-each entity-pool
+       (lambda (e i) (update-entity e game-time entity-pool i)))
 
       (for-each
        (lambda (upgrade)
 	 (when (upgrade :update)
-	   ((upgrade :update) upgrade entity-store collision-world)))
+	   ((upgrade :update) upgrade entity-pool collision-world)))
        (cowboy :upgrades))
 
       (collision-world 'resolve!)
@@ -1387,7 +1416,7 @@
 	   ((spawn-scarab)
 	    (let ((scarab (make-scarab (event 1) (event 2) (event 3))))
 	      (collision-world 'register! scarab)
-	      (entity-store 'add! scarab))))))
+	      (pool-add! entity-pool scarab))))))
 
       (set! game-time (+ 1 game-time)))
 
@@ -1395,10 +1424,9 @@
       (t80::cls 0)
       (map-render game-map *camera*)
 
-      (for-each 
-       (lambda (e)
-	 ((e :render) e))
-       (entity-store))
+      (pool-for-each entity-pool
+       (lambda (e i)
+	 ((e :render) e)))
 
       (for-each render-gem gems)
 
@@ -1461,8 +1489,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.14" 5 5 0)
-    (t80::print "Cowboy Survivors v0.14" (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.15" 5 5 0)
+    (t80::print "Cowboy Survivors v0.15" (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
