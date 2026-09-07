@@ -835,7 +835,7 @@
     (t80::spr (gem-sprite gem) (camera-transform (gem-x gem) (gem-y gem)) 15 1 0 0 1 1))
 
   (define (update-gem gem cowboy collect-xp!)
-    (if (within-raw? (gem-x gem) (gem-y gem) (cowboy :x) (cowboy :y) 16)
+    (if (within-raw? (gem-x gem) (gem-y gem) (cowboy :x) (cowboy :y) (cowboy :collection-radius))
 	(begin (collect-xp! cowboy 1)
 	       #f)
 	gem)))
@@ -931,6 +931,20 @@
     (let ((new-damage (damage-blueprint)))
       (set! (cowboy :extra-damage) (+ 1 (cowboy :extra-damage)))
       new-damage)))
+
+(module xp-radius-item 
+  (define (xp-radius-blueprint)
+    (hash-table
+     :id :xp-radius
+     :type :upgrade
+     :sprite 259
+     :name "XP Radius"
+     :description "Increases gem pickup radius"))
+
+  (define (make-xp-radius-item cowboy)
+    (let ((new-upgrade (xp-radius-blueprint)))
+      (set! (cowboy :collection-radius) (+ 8 (cowboy :collection-radius)))
+      new-upgrade)))
 
 (module speed-item 
   (define (speed-blueprint)
@@ -1119,6 +1133,7 @@
   (import damage-item)
   (import playing-card)
   (import winchester)
+  (import xp-radius-item)
 
   (define *gear-catalog*
     (hash-table
@@ -1126,6 +1141,7 @@
      :winchester (cons (winchester-blueprint) make-winchester)
      :heart (cons (heart-blueprint) make-extra-heart)
      :speed-item (cons (speed-blueprint) make-speed-item)
+     :xp-radius (cons (xp-radius-blueprint) make-xp-radius-item)
      :damage-item (cons (damage-blueprint) make-damage-item)
      :playing-card (cons (playing-card-blueprint) make-playing-card-gear))) 
 
@@ -1258,6 +1274,7 @@
 	     :x (car coords)
 	     :y (cdr coords)
 	     :radius 6
+	     :collection-radius 16
 	     :speed 10
 	     :level 1
 	     :xp 0
