@@ -417,11 +417,12 @@
 	  (bucket-add! key e))))
 
     (define (unregister! e)
-      (hash-table-set! members (e :collision-id) #f)
-      (set! (e :collision-id) #f)
-      (let ((key (e :collision-key)))
-	(when key (bucket-remove! key e))
-	(set! (e :collision-key) #f)))
+      (when (e :collision-id)
+	(hash-table-set! members (e :collision-id) #f)
+	(set! (e :collision-id) #f)
+	(let ((key (e :collision-key)))
+	  (when key (bucket-remove! key e))
+	  (set! (e :collision-key) #f))))
 
     (define (update-membership! mem)
       (let* ((e (cdr mem))
@@ -503,6 +504,8 @@
 	(else members)))))
 
 (module entity-helpers
+  (import events)
+
   (define (update-hit-debounce e)
     (when (and (e :hit-debounce) )
       (if (< 0 (e :hit-debounce))
@@ -515,7 +518,9 @@
       (when (e :duration)
 	(set! (e :duration) (- (e :duration) 1))
 	(when (<= (e :duration) 0)
-	  (set! (e :destroy?) #t))))
+	  (set! (e :destroy?) #t)
+	  (when (e :collision-id)
+            (add-event! (vector 'collision-unregister e))))))
 
   (define (update-time e)
     (when (e :time)
@@ -910,6 +915,7 @@
 		:damage damage
 		:update update-bullet
 		:render render-bullet)))
+
 (module damage-item 
   (define (damage-blueprint)
     (hash-table
@@ -1011,6 +1017,44 @@
       (set! (new-playing-card-blueprint :player) cowboy)
       new-playing-card-blueprint)))
 
+(module winchester 
+  (import projectile)
+  (import geometry)
+
+  (define (update-winchester self object-pool collision-world)
+    (set! (self :cooldown) (- (self :cooldown) 1 ))
+    (let ((cowboy (self :player)))
+      (when (<= (self :cooldown) 0)
+	(for-each 
+	 (lambda (dir)
+	   (let ((bullet (make-projectile (cowboy :x) (cowboy :y)
+					  dir 
+					  20
+					  (+ (cowboy :extra-damage)
+					     (self :damage)))))
+	     (pool-add! object-pool bullet)
+	     (collision-world 'register! bullet)))
+	 '((1.0 . 1.0) (1.0 . -1.0) (-1.0 . -1.0) (-1.0 . 1.0)))
+	(set! (self :cooldown) (self :max-cooldown)))))
+
+  (define (winchester-blueprint)
+      (hash-table
+       :id :winchester
+       :type :upgrade
+       :sprite 264
+       :name "Winchester"
+       :description "Shoots in a diagonal pattern"
+       :cooldown 200 
+       :max-cooldown 200 
+       :damage 4 
+       :stats '(:max-cooldown :damage)
+       :update update-winchester))
+
+  (define (make-winchester cowboy)
+    (let ((new-winchester (winchester-blueprint)))
+      (set! (new-winchester :player) cowboy)
+      new-winchester)))
+
 (module revolver 
   (import projectile)
   (import geometry)
@@ -1074,10 +1118,12 @@
   (import speed-item)
   (import damage-item)
   (import playing-card)
+  (import winchester)
 
   (define *gear-catalog*
     (hash-table
      :revolver (cons (revolver-blueprint) make-revolver)
+     :winchester (cons (winchester-blueprint) make-winchester)
      :heart (cons (heart-blueprint) make-extra-heart)
      :speed-item (cons (speed-blueprint) make-speed-item)
      :damage-item (cons (damage-blueprint) make-damage-item)
@@ -1596,19 +1642,10 @@
 ;; 003:6666666666666666666666666666666666666666666666666666666666666666
 ;; 004:6666666666666666666666666666666666666666666666666666666666666666
 ;; 005:6666666666666666666666666666666666666666666666666666666666666666
-;; 006:6666666666666666666666666666666666666666666666666666666666666666
-;; 007:6666666666666660666666006666600766660000666007706607777060770770
 ;; 018:6666666666666666666666666676766666676666666666666666666666666666
 ;; 019:6666666666676766666676666666666666666666666666666666666666666666
 ;; 020:6666666666666666666666666666666666666666666666666666666666666666
 ;; 021:6666666666666666666666666666666666666666666666666666666666666666
-;; 022:6666666666666060666666006666607766060777666077776607777060007777
-;; 023:0777707077707770007077700077777000077077700070077000770777000700
-;; 032:fff00fff00f010ff0300110001113000000110ffff0310ffff0110ffff0110ff
-;; 034:6666666600000000777077777770777777700777777707777770077777007777
-;; 035:6666666600000000770777777077777770777770077777700077777070077770
-;; 050:7707777777077777077077770070777770700777707707777007000000000000
-;; 051:7700777077707770770077007000700770007007700070070000000700000000
 ;; 064:fffff111fff11000ff100000f1000011f1001100100010001001000110010010
 ;; 065:111fffff00011fff000001ff1100001f0011001f000010011100010100100101
 ;; 066:0001011110011000001000000100001111001100100010001001000110010010
@@ -1628,6 +1665,7 @@
 ;; 005:8fff8fff88ff88fff88ff88fff88ff88ff88ff88f88ff88f88ff88ff8fff8fff
 ;; 006:ffffff99fffff999ffff999f9ff999ff66999ffff669ffff6666ffff66f69fff
 ;; 007:f000000ff044440ff049440ff044440ff044440ff044940ff044440ff000000f
+;; 008:fffffff2ffffff2ffffff27fffff27ffff227ffff771ffff7711ffff77ffffff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
 ;; 036:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
