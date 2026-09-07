@@ -114,8 +114,10 @@
   (define (make-pool size)
     (let ((free-stack (make-vector size 0))
 	  (in-use (make-vector size #f)))
-      (do ((i 0 (+ i 1))) ((= i size))
-	(vector-set! free-stack i i))
+      (let loop ((i 0))
+	(when (< i size)
+	  (vector-set! free-stack i i)
+	  (loop (+ i 1))))
       (vector free-stack in-use size)))
   
   (define (pool-free-stack p) (vector-ref p 0))
@@ -146,11 +148,13 @@
     (- (vector-length (pool-free-stack p)) (pool-top p)))
   
   (define (pool-for-each p f)
-    (let ((in-use (pool-in-use p)))
-      (do ((i 0 (+ i 1))) ((= i (length in-use)))
-	(let ((entity (vector-ref in-use i)))
-	  (when entity
-	    (f entity i)))))))
+    (let* ((in-use (pool-in-use p))
+	   (i 0))
+      (for-each
+       (lambda (e)
+	 (when e (f e i))
+	 (set! i (+ i 1)))
+       in-use))))
 
 (module utility 
   (define (filter predicate lst)
@@ -531,7 +535,8 @@
       (update-time e)
       (update-hit-debounce e)
       (when (e :destroy?)
-	(pool-remove! object-pool idx))
+	(pool-remove! object-pool idx)
+	)
       
       (case (e :type)
 	((:enemy)
@@ -658,16 +663,17 @@
   (define (render-snake snake)
     (for-each
      (lambda (link)
-       (if (link :white-flash?)
-	   (begin 
-	     (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) 4))
-	     (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15)
-	     (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
-	   (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15)))
+       (when link
+	 (if (link :white-flash?)
+	     (begin 
+	       (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) 4))
+	       (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15)
+	       (for (c 0 15) (t80::poke4 (+ (* #x3ff0 2) c) c)))
+	     (draw-sprite (camera-transform (link :x) (link :y)) 1 (- (link :angle)) (modulo (link :sprite) 16) (quotient (link :sprite) 16) 1 1 15))))
      (snake :links)))
 
   (define (update-snake snake)
-    (let* ((head (car (snake :links)))
+    (let* ((head (vector-ref (snake :links) 0))
 	   (target-angle (atan (- (snake :target :y) (head :y))
 			       (- (snake :target :x) (head :x))))
 	   (angle-diff (- (modulo (+ (- target-angle (head :angle)) pi)
@@ -686,29 +692,33 @@
       (set! (head :y)
 	(+ (head :y) (* speed (sin (head :angle)))))
 
-      (when (null? (cdr (snake :links)))
-	(set! (snake :destroy?) #t))
+      (set! (snake :destroy?) #t)
 
-      (do ((links (cdr (snake :links)) (cdr links))
-	   (prev-link head (car links)))
-	  ((null? links))
-	(let* ((link (car links))
-	       (dx (- (prev-link :x) (link :x)))
-	       (dy (- (prev-link :y) (link :y)))
-	       (dist (sqrt (+ (* dx dx) (* dy dy)))))
-	  (update-hit-debounce link)
-	  (when (<= (link :hp) 0)
-	    (add-event! (vector 'collision-unregister link))
-	    (add-event! (vector 'spawn-xp (link :x) (link :y) (link :drop-xp)))
-	    (set! (link :destroy?) #t))
-	  (set! (link :angle) (prev-link :angle))
-	  (when (< 8 dist)
-	    (set! (link :x) (+ (link :x) (* (/ dx dist)
-					    (- dist 8))))
-	    (set! (link :y) (+ (link :y) (* (/ dy dist)
-					    (- dist 8)))))))
+      (let ((prev-link  (vector-ref (snake :links) 0)))
+	(do ((i 1 (+ i 1)))
+	    ((= i (vector-length (snake :links))))
+	  (let ((link (vector-ref (snake :links) i)))
+	    (when link
+	      (let* ((dx (- (prev-link :x) (link :x)))
+		     (dy (- (prev-link :y) (link :y)))
+		     (dist (sqrt (+ (* dx dx) (* dy dy)))))
+		(when (not (link :destroy?))
+		  (set! (snake :destroy?) #f))
+		(update-hit-debounce link)
+		(set! (link :angle) (prev-link :angle))
+		(when (< 8 dist)
+		  (set! (link :x) (+ (link :x) (* (/ dx dist)
+						  (- dist 8))))
+		  (set! (link :y) (+ (link :y) (* (/ dy dist)
+						  (- dist 8)))))
 
-      (set! (snake :links) (filter (lambda (l) (not (l :destroy?))) (snake :links)))))
+		(when (<= (link :hp) 0)
+		  (add-event! (vector 'collision-unregister link))
+		  (add-event! (vector 'spawn-xp (link :x) (link :y) (link :drop-xp)))
+		  (set! (link :destroy?) #t))
+		(if (link :destroy?)
+		    (vector-set! (snake :links) i #f)
+		    (set! prev-link link)))))))))
 
   (define (make-snake-link tail?)
     (hash-table
@@ -733,15 +743,19 @@
      :sprite 308))
 
   (define (make-snake x y target)
-    (define links (list (make-snake-link #t)))
-    (for (i 0 20)
-	 (set! links (cons (make-snake-link #f) links)))
+    (define links (make-vector 20 #f))
+    (vector-set! links 0 (make-snake-head x y))
+
+    (for (i 1 19)
+	 (vector-set! links i (make-snake-link #f)))
+    (vector-set! links 19 (make-snake-link #t))
+
     (hash-table
      :type :boss
      :update update-snake
      :render render-snake
      :target target
-     :links (cons (make-snake-head x y) links)))
+     :links links))
   
 
   (define (damage-enemy! e amount)
@@ -1238,14 +1252,16 @@
 			(collision-world 'register! entity))))
 		  (spend-budget (current-budget seconds) seconds)))
 
-      (when (and (<= 150 seconds) (= 0 (modulo seconds 50)))
+      (when (and (<= 0 seconds) (= 0 (modulo seconds 50)))
 	(let ((snake (make-snake 0 0 cowboy)))
 	  (pool-add! object-pool snake)
 	  
 	  (for-each
 	   (lambda (l)
 	     (collision-world 'register! l))
-	   (cdr (snake :links))))))))
+	   (snake :links)))
+	)
+      )))
 
 (module pause-menu
   (import scene-module)
@@ -1383,7 +1399,6 @@
       (hash-table-set! *camera* :target-y (cowboy :y))
       (update-camera!)
 
-      
       (when (<= (cowboy :hp) 0)
 	(push-scene! (make-game-over-scene
 		      (lambda ()
