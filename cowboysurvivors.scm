@@ -535,8 +535,7 @@
       (update-time e)
       (update-hit-debounce e)
       (when (e :destroy?)
-	(pool-remove! object-pool idx)
-	)
+	(pool-remove! object-pool idx))
       
       (case (e :type)
 	((:enemy)
@@ -660,6 +659,53 @@
      :sprite 306 
      :hp 1))
 
+  (define (cactus-update e)
+    (cond
+     ((not (within? (e :target) e 70))
+      (let* ((dir (direction-to e (e :target)))
+	     (dir-x (car dir))
+	     (dir-y (cdr dir)))
+	(set! (e :status) :waddling)
+	(set! (e :sprite) '((352 2 2) (354 2 2)))
+	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 10))))
+	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 10))))))
+     ((and (eq? (e :status) :charging-up)
+	   (<= (e :charging-up) 0))
+      (let* ((dir (direction-to e (e :target)))
+	     (dir-x (car dir))
+	     (dir-y (cdr dir)))
+	(set! (e :status) :charging)
+	(set! (e :sprite) '((358 2 2)))
+	(set! (e :dir-x) dir-x)
+	(set! (e :dir-y) dir-y)))
+     ((and (eq? (e :status) :charging))
+      (let* ((dir-x (e :dir-x))
+	     (dir-y (e :dir-y)))
+	(set! (e :x) (+ (e :x) (* dir-x (/ (e :speed) 2))))
+	(set! (e :y) (+ (e :y) (* dir-y (/ (e :speed) 2))))))
+     ((eq? (e :status) :charging-up)
+      (set! (e :charging-up) (- (e :charging-up) 1)))
+     (else
+      (set! (e :status) :charging-up)
+      (set! (e :sprite) '((352 2 2) (356 2 2)))
+      (set! (e :charging-up) 120))))
+  
+  (define (make-cactus x y target)
+    (hash-table
+     :type :enemy
+     :x x 
+     :y y 
+     :radius 8
+     :speed 2
+     :time 0
+     :target target
+     :update cactus-update
+     :render render-entity
+     :scale 1
+     :sprite '((320 2 2) (322 2 2))
+     :drop-xp 4
+     :hp 50))
+
   (define (render-snake snake)
     (for-each
      (lambda (link)
@@ -730,7 +776,7 @@
      :angle 0
      :drop-xp 1
      :sprite (if tail? 310 309)
-     :hp 40))
+     :hp 50))
 
   (define (make-snake-head x y)
     (hash-table
@@ -1106,7 +1152,7 @@
   (define-constant cowboy-sprite 256)
 
   (define (damage-cowboy! e amount)
-      (when (not (e :hit-debounce))
+    (unless (e :hit-debounce)
 	(set! (e :hp) (- (e :hp) amount))
 	(shake-effect! 2 10)
 	(set! (e :hit-debounce) 50)
@@ -1148,14 +1194,14 @@
     (let* ((new-x ((if pos? + -) (cowboy :x) (* (cowboy :speed) 0.05)))
 	   (world-coords (real-coords->world (round new-x) (round (cowboy :y))))
 	   (tile (map-get-cell map (car world-coords) (cdr world-coords))))
-      (when (not (eq? tile 'empty))
+      (unless (eq? tile 'empty)
 	(set! (cowboy :x) new-x))))
 
   (define (move-cowboy-y! map cowboy pos?)
     (let* ((new-y ((if pos? + -) (cowboy :y) (* (cowboy :speed) 0.05)))
 	   (world-coords (real-coords->world (round (cowboy :x)) (round new-y)))
 	   (tile (map-get-cell map (car world-coords) (cdr world-coords))))
-      (when (not (eq? tile 'empty))
+      (unless (eq? tile 'empty)
 	(set! (cowboy :y) new-y))))
   
   (define (make-cowboy world-x world-y)
@@ -1217,7 +1263,8 @@
     (list
      (hash-table :id :tumbleweed :cost 1 :min-time 0 :make make-tumbleweed)
      (hash-table :id :big-tumbleweed :cost 3 :min-time 40 :make make-big-tumbleweed)
-     (hash-table :id :scarab-queen :cost 7 :min-time 80 :make make-scarab-queen))) 
+     (hash-table :id :scarab-queen :cost 7 :min-time 80 :make make-scarab-queen)
+     (hash-table :id :cactus :cost 10 :min-time 130 :make make-cactus))) 
 
   (define (available-enemies elapsed)
     (filter (lambda (e) (<= (e :min-time) elapsed)) enemy-types)) 
@@ -1252,7 +1299,7 @@
 			(collision-world 'register! entity))))
 		  (spend-budget (current-budget seconds) seconds)))
 
-      (when (and (<= 0 seconds) (= 0 (modulo seconds 50)))
+      (when (and (<= 180 seconds) (= 0 (modulo seconds 50)))
 	(let ((snake (make-snake 0 0 cowboy)))
 	  (pool-add! object-pool snake)
 	  
@@ -1603,6 +1650,22 @@
 ;; 081:77773fff77773fff77733fff7773ffff333000ffffff00000fffffff0fffffff
 ;; 082:33077777f3377777fff33777fff33777ffff3773fff03333ffff0fffffff0ff0
 ;; 083:77773fff77773fff77733fff7773ffff330fffffff0fffff0f0fffff0f0fffff
+;; 096:fffffffffffffffffffffff5ff1ff557f111fff1f1e11111f1ec11eef1eeeee0
+;; 097:ffffffff557fffff7777ffff777777ffeee1ffffeee1f111ece111e1e0eecee1
+;; 098:fffffffffffffff5ffffff57ffff5577ff1fff1ef111f11ef1e111eef1ec1ee0
+;; 099:ffffffff57ffffff777fffff77777fffee1ff111eee111e1ece1cee1e0eeee11
+;; 100:fffffffffffffffffffffff5ff1ff557f111fff1f1c11111f1cc11ccf1ccccc0
+;; 101:ffffffff557fffff7777ffff777777ffccc1ffffccc1f111ccc111c1c0ccccc1
+;; 102:fffffffffffffff9ffffff99ffff9999ff1fff1ef111f00ef1e11100f1ec1ee9
+;; 103:ffffffff99ffffff999fffff99999fffee1ff111ee0011e1e001cee1e9eeee11
+;; 112:f11eeee0ff111eecffff11eefffff1eefffff1eefffff1eefffff1eefffff111
+;; 113:e0eeee11eeeee11feee11fffeee1ffffcee1ffffce11ffffee11ffff1111ffff
+;; 114:f1eeeee0f11eeeecff1111eefffff1eefffff1eefffff1eefffff1eefffff111
+;; 115:e0eee11feeee1fffeee1ffffeee1ffffcee1ffffce11ffffee11ffff1111ffff
+;; 116:f11cccc0ff111cccffff11ccfffff1ccfffff1ccfffff1ccfffff1ccfffff111
+;; 117:c0cccc11ccccc11fccc11fffccc1ffffccc1ffffcc11ffffcc11ffff1111ffff
+;; 118:f1eeeee9f11eeeecff1111eefffff1eefffff1eefffff1eefffff1eefffff111
+;; 119:e9eee11feeee1fffeee1ffffeee1ffffcee1ffffce11ffffee11ffff1111ffff
 ;; </SPRITES>
 
 ;; <WAVES>
