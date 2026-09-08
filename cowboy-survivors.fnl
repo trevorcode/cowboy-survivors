@@ -6,13 +6,12 @@
 ;; version: 0.1
 ;; script:  fennel
 ;; Cowboy Survivors - rewritten from s7 Scheme into Fennel for TIC-80.
+
 (local screen-width 240)
 (local screen-height 136)
 
 (var t 0)
 
-(var ui-module nil)
-(var transition-scene nil)
 (var main-menu-scene nil)
 
 (local coroutines
@@ -79,9 +78,6 @@
           (when (pred v) (table.insert result v)))
         result))
 
-    (fn list-ref [lst i]
-      (. lst (+ i 1)))
-
     (fn randi [n]
       (math.random 0 (- n 1)))
 
@@ -91,9 +87,7 @@
     (fn list->random [lst]
       (if (= (length lst) 0)
           false
-          (list-ref lst (randi (length lst)))))
-
-    (fn id [x] x)
+          (. lst (+ 1 (randi (length lst))))))
 
     (fn round [x]
       (math.floor (+ x 0.5)))
@@ -122,14 +116,13 @@
       (let [copy []]
         (each [_ v (ipairs arr)] (table.insert copy v))
         (for [i (length copy) 2 -1]
-          (let [j (+ 1 (math.random i))
+          (let [j (math.random i)
                 tmp (. copy i)]
             (tset copy i (. copy j))
             (tset copy j tmp)))
-        copy))
+        copy)) 
 
-
-    {: filter : list-ref : randi : randf : list->random : id : round
+    {: filter : randi : randf : list->random : round
      : for-each-indexed : lerp : ease-out-cubic : ease-in-cubic
      : ease-in-out-cubic : shuffle }))
 
@@ -149,12 +142,9 @@
     (fn swap-below! [new-scene]
       (tset scenes 2 new-scene))
 
-    (fn current-scene []
-      (. scenes 1))
-
     (fn run-scenes! []
       (when (> (length scenes) 0)
-        (let [top (current-scene)]
+        (let [top (. scenes 1)]
           (top.input)
           (top.update)
           (for [i (length scenes) 1 -1]
@@ -162,7 +152,7 @@
               (s.render))))))
 
     {: push-scene! : pop-scene! : set-scene! : swap-below!
-     : current-scene : run-scenes!}))
+     : run-scenes!}))
 
 (local camera
   (do
@@ -186,9 +176,8 @@
       (table.insert event-list e))
 
     (fn process-events [f]
-      (let [to-process event-list]
-        (set event-list [])
-        (each [_ e (ipairs to-process)] (f e))))
+      (each [_ e (ipairs event-list)] (f e))
+      (set event-list []))
 
     {: add-event! : process-events}))
 
@@ -263,7 +252,7 @@
                   (spr 64 (+ (. offset 1) sx) (+ (. offset 2) sy)
                            15 1 0 (. offset 3) 2 2))))))))
 
-    {: generate-map : floor-quotient : map-get-cell : world->real-coords
+    {: generate-map : map-get-cell : world->real-coords
      : real-coords->world : random-direction : map-render}))
 
 (local geometry
@@ -483,6 +472,60 @@
     {: update-hit-debounce : update-duration : update-time
      : update-direction : update-entity}))
 
+(local ui-module
+  (do
+    (fn render-time [game-time]
+      (let [seconds (// game-time 60)]
+        (print (.. "Time " (tostring seconds)) 195 2 0)
+        (print (.. "Time " (tostring seconds)) 196 2 4)))
+
+    (fn render-hp [hp]
+      (for [i 0 (- hp 1)]
+        (spr 272 (* i 9) 0 15 1 0 0 1 1)))
+
+    (fn render-xp [xp xp-needed]
+      (rect 0 (- screen-height 4) (math.floor (* screen-width (/ xp xp-needed))) 4 13))
+
+    (fn shake-effect! [intensity ?duration]
+      (let [duration (or ?duration 20)]
+        (coroutines.spawn!
+          (fn [yield]
+            (for [i 0 (- duration 1)]
+              (poke 0x3FF9 (- (utility.randi (+ 1 (* 2 intensity))) intensity))
+              (poke (+ 0x3FF9 1) (- (utility.randi (+ 1 (* 2 intensity))) intensity))
+              (yield))
+            (memset 0x3FF9 0 2)))))
+
+    (fn draw-sprite [sx sy scale angle mx my mw mh key]
+      (let [sv [[-1 -1 0 0] [1 -1 0.999 0] [-1 1 0 0.999] [1 1 0.999 0.999]]
+            scale-x (* (lshift mw 2) scale)
+            scale-y (* (lshift mh 2) scale)
+            a (* -1 angle)]
+        (for [p 1 4]
+          (let [point (. sv p)
+                _sx (* (. point 1) scale-x)
+                _sy (* (. point 2) scale-y)
+                rx (- (* _sx (math.cos a)) (* _sy (math.sin a)))
+                ry (+ (* _sx (math.sin a)) (* _sy (math.cos a)))]
+            (tset point 1 (utility.round (+ rx sx)))
+            (tset point 2 (utility.round (+ ry sy)))
+            (tset point 3 (utility.round (+ (lshift mx 3) (* (. point 3) (lshift mw 3)))))
+            (tset point 4 (utility.round (+ (lshift my 3) (* (. point 4) (lshift mh 3)))))))
+        (ttri (. (. sv 1) 1) (. (. sv 1) 2)
+                  (. (. sv 2) 1) (. (. sv 2) 2)
+                  (. (. sv 3) 1) (. (. sv 3) 2)
+                  (. (. sv 1) 3) (. (. sv 1) 4)
+                  (. (. sv 2) 3) (. (. sv 2) 4)
+                  (. (. sv 3) 3) (. (. sv 3) 4) 0 key)
+        (ttri (. (. sv 2) 1) (. (. sv 2) 2)
+                  (. (. sv 3) 1) (. (. sv 3) 2)
+                  (. (. sv 4) 1) (. (. sv 4) 2)
+                  (. (. sv 2) 3) (. (. sv 2) 4)
+                  (. (. sv 3) 3) (. (. sv 3) 4)
+                  (. (. sv 4) 3) (. (. sv 4) 4) 0 key)))
+
+    {: render-time : render-hp : render-xp : shake-effect! : draw-sprite}))
+
 (local enemies
   (do
     (fn enemy-follow-player [e]
@@ -493,7 +536,7 @@
     (fn sprite-frame [e]
       (let [sprite e.sprite]
         (if (= (type sprite) :table)
-            (utility.list-ref sprite (% (// e.time 10) (length sprite)))
+            (. sprite (+ 1 (% (// e.time 10) (length sprite))))
             sprite)))
 
     (fn draw-sprite-frame [e frame]
@@ -650,10 +693,8 @@
             (tset e :white-flash? true)
             true)))
 
-    {: enemy-follow-player : sprite-frame : draw-sprite-frame : render-entity
-     : make-tumbleweed : make-big-tumbleweed : scarab-queen-update
-     : make-scarab-queen : make-scarab : cactus-update : make-cactus
-     : render-snake : update-snake : make-snake-link : make-snake-head
+    {: make-tumbleweed : make-big-tumbleweed
+     : make-scarab-queen : make-scarab : make-cactus
      : make-snake : damage-enemy!}))
 
 (local gem-module
@@ -672,61 +713,8 @@
           (do (collect-xp! cowboy 1) nil)
           g))
 
-    {: make-xp-orb : gem-x : gem-y : gem-sprite : render-gem : update-gem}))
+    {: make-xp-orb : render-gem : update-gem}))
 
-(set ui-module
-  (do
-    (fn render-time [game-time]
-      (let [seconds (// game-time 60)]
-        (print (.. "Time " (tostring seconds)) 195 2 0)
-        (print (.. "Time " (tostring seconds)) 196 2 4)))
-
-    (fn render-hp [hp]
-      (for [i 0 (- hp 1)]
-        (spr 272 (* i 9) 0 15 1 0 0 1 1)))
-
-    (fn render-xp [xp xp-needed]
-      (rect 0 (- screen-height 4) (math.floor (* screen-width (/ xp xp-needed))) 4 13))
-
-    (fn shake-effect! [intensity ?duration]
-      (let [duration (or ?duration 20)]
-        (coroutines.spawn!
-          (fn [yield]
-            (for [i 0 (- duration 1)]
-              (poke 0x3FF9 (- (utility.randi (+ 1 (* 2 intensity))) intensity))
-              (poke (+ 0x3FF9 1) (- (utility.randi (+ 1 (* 2 intensity))) intensity))
-              (yield))
-            (memset 0x3FF9 0 2)))))
-
-    (fn draw-sprite [sx sy scale angle mx my mw mh key]
-      (let [sv [[-1 -1 0 0] [1 -1 0.999 0] [-1 1 0 0.999] [1 1 0.999 0.999]]
-            scale-x (* (lshift mw 2) scale)
-            scale-y (* (lshift mh 2) scale)
-            a (* -1 angle)]
-        (for [p 1 4]
-          (let [point (. sv p)
-                _sx (* (. point 1) scale-x)
-                _sy (* (. point 2) scale-y)
-                rx (- (* _sx (math.cos a)) (* _sy (math.sin a)))
-                ry (+ (* _sx (math.sin a)) (* _sy (math.cos a)))]
-            (tset point 1 (utility.round (+ rx sx)))
-            (tset point 2 (utility.round (+ ry sy)))
-            (tset point 3 (utility.round (+ (lshift mx 3) (* (. point 3) (lshift mw 3)))))
-            (tset point 4 (utility.round (+ (lshift my 3) (* (. point 4) (lshift mh 3)))))))
-        (ttri (. (. sv 1) 1) (. (. sv 1) 2)
-                  (. (. sv 2) 1) (. (. sv 2) 2)
-                  (. (. sv 3) 1) (. (. sv 3) 2)
-                  (. (. sv 1) 3) (. (. sv 1) 4)
-                  (. (. sv 2) 3) (. (. sv 2) 4)
-                  (. (. sv 3) 3) (. (. sv 3) 4) 0 key)
-        (ttri (. (. sv 2) 1) (. (. sv 2) 2)
-                  (. (. sv 3) 1) (. (. sv 3) 2)
-                  (. (. sv 4) 1) (. (. sv 4) 2)
-                  (. (. sv 2) 3) (. (. sv 2) 4)
-                  (. (. sv 3) 3) (. (. sv 3) 4)
-                  (. (. sv 4) 3) (. (. sv 4) 4) 0 key)))
-
-    {: render-time : render-hp : render-xp : shake-effect! : draw-sprite}))
 
 (local projectile
   (do
@@ -740,7 +728,7 @@
       {:x x :y y :radius 6 :speed speed :type :projectile :direction direction
        :sprite 258 :duration 120 :damage damage :update update-bullet :render render-bullet})
 
-    {: update-bullet : render-bullet : make-projectile}))
+    {: make-projectile}))
 
 (local damage-item
   (do
@@ -835,8 +823,7 @@
         (tset bp :player cowboy)
         bp))
 
-    {: playing-card-position : update-playing-card : render-playing-card
-     : make-playing-card : update-playing-card-blueprint : playing-card-blueprint
+    {: make-playing-card  : playing-card-blueprint
      : make-playing-card-gear}))
 
 (local winchester
@@ -904,7 +891,7 @@
         (tset bp :player cowboy)
         bp))
 
-    {: render-revolver : update-revolver : revolver-blueprint : make-revolver}))
+    {: update-revolver : revolver-blueprint : make-revolver}))
 
 (local level-up-scene
   (do
@@ -971,8 +958,6 @@
 
 (local cowboy-module
   (do
-    (local cowboy-sprite 256)
-
     (fn damage-cowboy! [e amount]
       (when (not e.hit-debounce)
         (tset e :hp (- e.hp amount))
@@ -1033,7 +1018,7 @@
          :speed 10 :level 1 :xp 0 :extra-damage 0 :upgrades []
          :update (fn [x y] false) :hp 5 :render render-cowboy :moving? false}))
 
-    {: cowboy-sprite : damage-cowboy! : render-cowboy : xp-needed : level-up!
+    {: damage-cowboy! : xp-needed : level-up!
      : collect-xp! : move-cowboy-x! : move-cowboy-y! : make-cowboy}))
 
 (local collision-rules
@@ -1077,7 +1062,7 @@
       (utility.filter (fn [e] (<= e.min-time elapsed)) enemy-types))
 
     (fn current-budget [elapsed-seconds]
-      (+ 500 (* 0.05 elapsed-seconds)))
+      (+ 1 (* 0.05 elapsed-seconds)))
 
     (fn spend-budget [budget elapsed]
       (let [candidates (available-enemies elapsed)
@@ -1114,8 +1099,7 @@
               (when (= l.type :link)
                 (collision-world.register! l)))))))
 
-    {: enemy-types : available-enemies : current-budget : spend-budget
-     : get-random-position-radius-cowboy : spawn-enemies}))
+    {: spawn-enemies}))
 
 (local pause-menu
   (do
@@ -1185,7 +1169,33 @@
        :update (fn [] true)
        :render render-game-over-scene})
 
-    {: render-game-over-scene : make-game-over-scene}))
+    {: make-game-over-scene}))
+
+(local transition-scene
+  (do
+    (fn render-transition-screen [x y]
+      (for [i 0 14]
+        (for [j 0 8]
+          (spr 66 (+ x (* 16 i)) (+ y (* 16 j)) -1 1 0 0 2 2))))
+
+    (fn make-transition-scene [on-swap duration]
+      (var elapsed 0)
+      (var phase :out)
+      {:input (fn [] true)
+       :update (fn []
+                 (set elapsed (+ 1 elapsed))
+                 (when (<= duration elapsed)
+                   (if (= phase :out)
+                       (do (on-swap) (set phase :in) (set elapsed 0))
+                       (= phase :in)
+                       (scene-module.pop-scene!))))
+       :render (fn []
+                 (let [progress (/ elapsed duration)]
+                   (if (= phase :in)
+                       (render-transition-screen 0 (math.floor (* screen-height (utility.ease-out-cubic progress))))
+                       (render-transition-screen 0 (math.floor (- screen-height (* screen-height (utility.ease-out-cubic progress))))))))})
+
+    {: make-transition-scene}))
 
 (local game-scene-module
   (do
@@ -1236,6 +1246,7 @@
             (scene-module.push-scene!
               (game-over-scene.make-game-over-scene
                 (fn []
+                  (scene-module.pop-scene!)
                   (scene-module.push-scene!
                     (transition-scene.make-transition-scene
                       (fn [] (scene-module.swap-below! (main-menu-scene.make-main-menu-scene)))
@@ -1289,31 +1300,6 @@
 
     {: make-game-scene}))
 
-(set transition-scene
-  (do
-    (fn render-transition-screen [x y]
-      (for [i 0 14]
-        (for [j 0 8]
-          (spr 66 (+ x (* 16 i)) (+ y (* 16 j)) -1 1 0 0 2 2))))
-
-    (fn make-transition-scene [on-swap duration]
-      (var elapsed 0)
-      (var phase :out)
-      {:input (fn [] true)
-       :update (fn []
-                 (set elapsed (+ 1 elapsed))
-                 (when (<= duration elapsed)
-                   (if (= phase :out)
-                       (do (on-swap) (set phase :in) (set elapsed 0))
-                       (= phase :in)
-                       (scene-module.pop-scene!))))
-       :render (fn []
-                 (let [progress (/ elapsed duration)]
-                   (if (= phase :in)
-                       (render-transition-screen 0 (math.floor (* screen-height (utility.ease-out-cubic progress))))
-                       (render-transition-screen 0 (math.floor (- screen-height (* screen-height (utility.ease-out-cubic progress))))))))})
-
-    {: render-transition-screen : make-transition-scene}))
 
 (set main-menu-scene
   (do
@@ -1325,8 +1311,8 @@
 
     (fn render-main-menu-scene [menu-options selected]
       (cls 0)
-      (print "Cowboy Survivors v0.17" 5 5 0)
-      (print "Cowboy Survivors v0.17" 6 6 4)
+      (print "Cowboy Survivors v0.18" 5 5 0)
+      (print "Cowboy Survivors v0.18" 6 6 4)
       (utility.for-each-indexed
         (fn [option i] (menu-option 30 30 option.text (= selected i)))
         menu-options))
@@ -1349,7 +1335,7 @@
          :update (fn [] true)
          :render (fn [] (render-main-menu-scene menu-options selected))}))
 
-    {: menu-option : render-main-menu-scene : make-main-menu-scene}))
+    {: make-main-menu-scene}))
 
 (scene-module.push-scene! (main-menu-scene.make-main-menu-scene))
 
@@ -1444,15 +1430,3 @@
 ;; <PALETTE>
 ;; 000:191d1e3f455070787ac0bfc0eae5e2baaa91877459534b3ad9af80b079726868877f9bb0bfd4b090b870628c70333c57
 ;; </PALETTE>
-
-(fn test []
-  (let [k 0]
-    (var okay 0)
-    (var continue true)
-    (while continue
-      (print "ok")
-      (set okay 10)
-      (set continue false))
-    (print okay))) 
-
-(test) 
