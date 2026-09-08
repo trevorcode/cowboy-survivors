@@ -1615,8 +1615,8 @@
   
   (define (render-main-menu-scene menu-options selected)
     (t80::cls 0)
-    (t80::print "Cowboy Survivors v0.16" 5 5 0)
-    (t80::print "Cowboy Survivors v0.16" (+ 1 5) (+ 1 5) 4)
+    (t80::print "Cowboy Survivors v0.17" 5 5 0)
+    (t80::print "Cowboy Survivors v0.17" (+ 1 5) (+ 1 5) 4)
     (for-each 
      (lambda (option i)
        (menu-option 30 30 (option :text) (= selected i)))
