@@ -486,6 +486,10 @@
     (fn render-xp [xp xp-needed]
       (rect 0 (- screen-height 4) (math.floor (* screen-width (/ xp xp-needed))) 4 13))
 
+    (fn draw-center-text [text y]
+      (print text (math.floor (- (/ 240 2) (* 6 (/ (length text) 2)))) y 0)
+      (print text (+ 1 (math.floor (- (/ 240 2) (* 6 (/ (length text) 2))))) y 4))
+
     (fn shake-effect! [intensity ?duration]
       (let [duration (or ?duration 20)]
         (coroutines.spawn!
@@ -524,7 +528,20 @@
                   (. (. sv 3) 3) (. (. sv 3) 4)
                   (. (. sv 4) 3) (. (. sv 4) 4) 0 key)))
 
-    {: render-time : render-hp : render-xp : shake-effect! : draw-sprite}))
+    (fn render-b-or-x [x y]
+      (spr 275 x (- y 3) 15 1 0 0 1 1)
+      (spr 277 (+ 13 x) (- y 3) 15 1 0 0 1 1)
+      (print "/" (+ 6 x) y 4) 
+      (print "/" (+ 7 x) y 4))
+
+    (fn render-a-or-z [x y]
+      (spr 274 x (- y 2) 15 1 0 0 1 1)
+      (spr 276 (+ 15 x) (- y 2) 15 1 0 0 1 1)
+      (print "/" (+ 8 x) y 4) 
+      (print "/" (+ 9 x) y 4))
+
+    {: render-time : render-hp : render-xp : shake-effect! : draw-sprite
+     : draw-center-text : render-a-or-z : render-b-or-x}))
 
 (local enemies
   (do
@@ -939,7 +956,11 @@
                   (print (stat-display-name stat) (+ 2 card-start-x) (+ 36 (* j 10) card-start-y) 0 true 1 true)
                   (print (tostring (. bp stat)) (+ 42 card-start-x) (+ 36 (* j 10) card-start-y) 0))
                 bp.stats))))
-        options))
+        options)
+      (print "Select" 179 114 0)
+      (print "Select" 180 114 4)
+      (ui-module.render-a-or-z 152 114)
+      )
 
     (fn make-level-up-scene [cowboy]
       (let [options (choose-upgrade-options)]
@@ -1160,9 +1181,10 @@
 (local game-over-scene
   (do
     (fn render-game-over-scene []
-      (print "Game Over" 30 30 2)
-      (print "Game Over" 31 31 0)
-      (print "Press X to continue" 31 61 0))
+      (ui-module.draw-center-text "Game Over" 30)
+      (ui-module.draw-center-text "Press   or   to restart" 48)
+      (spr 275 83 47 15 1 0 0 1 1)
+      (spr 277 107 47 15 1 0 0 1 1))
 
     (fn make-game-over-scene [on-restart]
       {:input (fn [] (when (btnp 5) (on-restart)))
@@ -1305,22 +1327,20 @@
   (do
     (fn menu-option [x y name selected?]
       (print name x y 0)
-      (print name (+ 1 x) (+ 1 y) 4)
-      (when selected?
-        (tri x (+ 4 y) (- x 4) y (- x 4) (+ 8 y) 14)))
+      (print name (+ 1 x) (+ 1 y) 4))
 
     (fn render-main-menu-scene [menu-options selected]
       (cls 0)
-      (print "Cowboy Survivors v0.18" 5 5 0)
-      (print "Cowboy Survivors v0.18" 6 6 4)
+      (ui-module.draw-center-text "Cowboy Survivors v0.18" 5)
       (utility.for-each-indexed
-        (fn [option i] (menu-option 30 30 option.text (= selected i)))
-        menu-options))
+        (fn [option i] (menu-option 70 30 option.text (= selected i)))
+        menu-options)
+      (ui-module.render-a-or-z 100 44))
 
     (fn make-main-menu-scene []
       (var selected 0)
       (let [menu-options
-            [{:text "Play"
+            [{:text "Press to start"
               :fn (fn []
                     (scene-module.push-scene!
                       (transition-scene.make-transition-scene
@@ -1375,6 +1395,10 @@
 ;; 008:fffffff2ffffff2ffffff27fffff27ffff227ffff771ffff7711ffff77ffffff
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
+;; 018:ffeeeefffeccccefeceeeeceececceceeceeeeceececcecefeccccefffeeeeff
+;; 019:ffaaaafffa9999afa99a999aa99aa99aa99a9a9aa99aaa9afa9999afffaaaaff
+;; 020:2222222223333332232222322333233223323332232222322333333222222222
+;; 021:2222222223333332232232322332233223322332232322322333333222222222
 ;; 036:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ;; 037:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ;; 038:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
@@ -1430,3 +1454,4 @@
 ;; <PALETTE>
 ;; 000:191d1e3f455070787ac0bfc0eae5e2baaa91877459534b3ad9af80b079726868877f9bb0bfd4b090b870628c70333c57
 ;; </PALETTE>
+
