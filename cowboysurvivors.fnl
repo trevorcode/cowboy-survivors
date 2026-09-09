@@ -751,7 +751,7 @@
   (do
     (fn damage-blueprint []
       {:id :damage-item :type :upgrade :sprite 262 :name "Damage" :damage 1
-       :stats [:damage] :description "Gives extra damage"})
+       :stats [:damage] :description "Gives one extra damage\nto all your weapons"})
 
     (fn make-damage-item [cowboy]
       (let [new-item (damage-blueprint)]
@@ -777,7 +777,7 @@
   (do
     (fn speed-blueprint []
       {:id :speed-item :type :upgrade :sprite 261 :name "Speed"
-       :description "Gives extra speed"})
+       :description "Gives the cowboy extra \nmovement speed"})
 
     (fn make-speed-item [cowboy]
       (let [new-item (speed-blueprint)]
@@ -831,8 +831,9 @@
           (collision-world.register! new-card))))
 
     (fn playing-card-blueprint []
-      {:id :playing-card :type :upgrade :name "Texas \nHold-em" :sprite 263
+      {:id :playing-card :type :upgrade :name "Texas Hold-em" :sprite 263
        :range 32 :playing-card false :damage 1 :stats [:damage]
+       :description "A playing card circles around you\ndealing 1 damage to enemies on hit"
        :update update-playing-card-blueprint})
 
     (fn make-playing-card-gear [cowboy]
@@ -859,7 +860,7 @@
 
     (fn winchester-blueprint []
       {:id :winchester :type :upgrade :sprite 264 :name "Winchester"
-       :description "Shoots in a diagonal pattern" :cooldown 200 :max-cooldown 200
+       :description "Shoots in a diagonal pattern\ndealing 4 damage per projectile" :cooldown 200 :max-cooldown 200
        :damage 4 :stats [:max-cooldown :damage] :update update-winchester})
 
     (fn make-winchester [cowboy]
@@ -899,8 +900,8 @@
 
     (fn revolver-blueprint []
       {:id :revolver :type :upgrade :sprite 260 :name "Revolver"
-       :description "Targets 1 enemy at a time, fires a bullet" :cooldown 120
-       :max-cooldown 120 :range 64 :target false :damage 9
+       :description "Targets 1 enemy at a time,\nfires a bullet that does 10 damage" :cooldown 120
+       :max-cooldown 120 :range 64 :target false :damage 10
        :stats [:max-cooldown :range :damage] :update update-revolver :render render-revolver})
 
     (fn make-revolver [cowboy]
@@ -940,22 +941,18 @@
       (print "Choose an upgrade" 18 18 3)
       (utility.for-each-indexed
         (fn [option i]
-          (let [card-height (- screen-height 60)
-                card-width (- (// screen-width 3) 20)
+          (let [card-height 20 
+                card-width 20
                 card-start-y 30
-                card-start-x (+ 25 (* i (+ 5 card-width)))
+                card-start-x (+ 76 (* i (+ 10 card-width)))
                 bp option.blueprint]
             (when (= i selected)
-              (rect (- card-start-x 3) (- card-start-y 3) (+ card-width 6) (+ card-height 6) 8))
+              (rect (- card-start-x 3) (- card-start-y 3) (+ card-width 6) (+ card-height 6) 8) 
+              (rect 17 54 (- screen-width 34) 55 4) 
+              (print bp.name 21 58 0)
+              (print bp.description 21 68 0))
             (rect card-start-x card-start-y card-width card-height 3)
-            (spr bp.sprite (+ 2 card-start-x) (+ 2 card-start-y) 15 2 0 0 1 1)
-            (print bp.name (+ 2 card-start-x) (+ 20 card-start-y) 0)
-            (when bp.stats
-              (utility.for-each-indexed
-                (fn [stat j]
-                  (print (stat-display-name stat) (+ 2 card-start-x) (+ 36 (* j 10) card-start-y) 0 true 1 true)
-                  (print (tostring (. bp stat)) (+ 42 card-start-x) (+ 36 (* j 10) card-start-y) 0))
-                bp.stats))))
+            (spr bp.sprite (+ 2 card-start-x) (+ 2 card-start-y) 15 2 0 0 1 1)))
         options)
       (print "Select" 179 114 0)
       (print "Select" 180 114 4)
@@ -1331,7 +1328,7 @@
 
     (fn render-main-menu-scene [menu-options selected]
       (cls 0)
-      (ui-module.draw-center-text "Cowboy Survivors v0.18" 5)
+      (ui-module.draw-center-text "Cowboy Survivors v0.19" 5)
       (utility.for-each-indexed
         (fn [option i] (menu-option 70 30 option.text (= selected i)))
         menu-options)
