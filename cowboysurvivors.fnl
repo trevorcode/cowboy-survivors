@@ -463,7 +463,7 @@
                 (events.add-event! [:collision-unregister e]))
               (when e.update (e.update e)))
 
-            (or (= e.type :projectile) (= e.type :boss))
+            (or (= e.type :projectile) (= e.type :boss) (= e.type :dynamite) (= e.type :explosion))
             (e.update e)
 
             (= e.type :weapon)
@@ -844,6 +844,74 @@
     {: make-playing-card  : playing-card-blueprint
      : make-playing-card-gear}))
 
+(local dynamite
+  (do
+    (fn update-explosion [explosion]
+      (trace explosion.time)
+      (when (= explosion.time 2)
+        (explosion.collision-world.unregister! explosion))
+      (when (= explosion.time 16)
+        (set explosion.destroy? true)))
+
+    (fn render-explosion [self]
+      (let [(sx sy) (camera.camera-transform self.x self.y)
+            frame (. self.sprite (+ 1 (% (// self.time 6) (length self.sprite))))]
+        (circb sx sy 24 9)
+        (spr (. frame 1) (- sx 16) (- sy 16) 15 2 0 0 (. frame 2) (. frame 3))))
+
+    (fn make-explosion [collision-world object-pool x y damage]
+      (let [explosion
+            {:x x :y y :type :explosion
+             :radius 26
+             :time 0 :sprite [[296 2 2] [298 2 2] [300 2 2]] :damage damage :update update-explosion
+             :collision-world collision-world
+             :render render-explosion}]
+        (collision-world.register! explosion)
+        (pool.pool-add! object-pool explosion)))
+
+    (fn update-dynamite [e]
+      (let [progress (utility.ease-out-cubic (- 1 (/ e.duration 120)))] 
+        (set e.x (utility.lerp progress e.start-x e.target-x))
+        (set e.y (utility.lerp progress e.start-y e.target-y))
+        (when (= e.duration 1) 
+          (make-explosion e.collision-world e.object-pool e.x e.y e.damage))))
+
+    (fn render-dynamite [self]
+      (let [(sx sy) (camera.camera-transform self.x self.y)
+            progress (- 1 (/ self.duration 120))]
+        (elli sx sy 4 2 0)
+        (spr self.sprite (- sx 4) (- (- sy 6) (* 16 (math.sin (* progress math.pi)))) 15 1 0 0 1 1)))
+
+    (fn make-dynamite-stick [collision-world object-pool x y target-x target-y damage]
+      {:x x :y y :start-x x :start-y y :target-x target-x :target-y target-y :type :dynamite
+       :collision-world collision-world :object-pool object-pool
+       :sprite 265 :duration 120 :damage damage :update update-dynamite :render render-dynamite})
+
+    (fn update-dynamite-pouch [self object-pool collision-world]
+      (tset self :cooldown (- self.cooldown 1))
+
+      (when (<= self.cooldown 0)
+        (let [cowboy self.player
+              directions [[32.0 0.0] [0 -32.0] [-32.0 0] [0 32.0]]
+              direction (utility.list->random directions)
+              target-x (+ cowboy.x (. direction 1))
+              target-y (+ cowboy.y (. direction 2))
+              dynamite-stick (make-dynamite-stick collision-world object-pool cowboy.x cowboy.y target-x target-y self.damage)]
+          (pool.pool-add! object-pool dynamite-stick)
+          (tset self :cooldown self.max-cooldown))))
+
+    (fn dynamite-pouch-blueprint []
+      {:id :dynamite :type :upgrade :sprite 265 :name "Dynamite"
+       :description "Leaves a dynamite on the ground that\nexplodes after a few seconds" :cooldown 210 :max-cooldown 210
+       :damage 20 :stats [:max-cooldown :damage] :update update-dynamite-pouch})
+
+    (fn make-dynamite-pouch [cowboy]
+      (let [d (dynamite-pouch-blueprint)]
+        (tset d :player cowboy)
+        d))
+
+    {: dynamite-pouch-blueprint : make-dynamite-pouch}))
+
 (local winchester
   (do
     (fn update-winchester [self object-pool collision-world]
@@ -916,6 +984,7 @@
     (local gear-catalog
       [{:id :revolver :blueprint (revolver.revolver-blueprint) :make revolver.make-revolver}
        {:id :winchester :blueprint (winchester.winchester-blueprint) :make winchester.make-winchester}
+       {:id :dynamite :blueprint (dynamite.dynamite-pouch-blueprint) :make dynamite.make-dynamite-pouch}
        {:id :heart :blueprint (extra-heart.heart-blueprint) :make extra-heart.make-extra-heart}
        {:id :speed-item :blueprint (speed-item.speed-blueprint) :make speed-item.make-speed-item}
        {:id :xp-radius :blueprint (xp-radius-item.xp-radius-blueprint) :make xp-radius-item.make-xp-radius-item}
@@ -1050,6 +1119,10 @@
 
       (collision-world.on-collision! :weapon :link
         (fn [w e] (enemies.damage-enemy! e (+ w.cowboy.extra-damage w.damage))))
+
+      (collision-world.on-collision! :explosion :enemy
+        (fn [a b]
+          (enemies.damage-enemy! b a.damage)))
 
       (collision-world.on-collision! :projectile :enemy
         (fn [a b]
@@ -1328,7 +1401,7 @@
 
     (fn render-main-menu-scene [menu-options selected]
       (cls 0)
-      (ui-module.draw-center-text "Cowboy Survivors v0.19" 5)
+      (ui-module.draw-center-text "Cowboy Survivors v0.20" 5)
       (utility.for-each-indexed
         (fn [option i] (menu-option 70 30 option.text (= selected i)))
         menu-options)
@@ -1390,6 +1463,7 @@
 ;; 006:ffffff99fffff999ffff999f9ff999ff66999ffff669ffff6666ffff66f69fff
 ;; 007:f000000ff044440ff049440ff044440ff044440ff044940ff044440ff000000f
 ;; 008:fffffff2ffffff2ffffff27fffff27ffff227ffff771ffff7711ffff77ffffff
+;; 009:ff22222ff211fff2f2941f2ffa9941ffffa9991ffffa9991ffffa991fffffaaf
 ;; 016:f99ff99f999999999949999a9949999af99999afff999afffff9afffffffffff
 ;; 017:f00ff00f000000000000000000000000f000000fff0000fffff00fffffffffff
 ;; 018:ffeeeefffeccccefeceeeeceececceceeceeeeceececcecefeccccefffeeeeff
@@ -1399,12 +1473,24 @@
 ;; 036:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ;; 037:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
 ;; 038:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+;; 040:fffffffffffffffffffffffffffffffffffffff9ffffff8ffffff9ffffff8ff4
+;; 041:ffffffffffffffffffffffffffffffff8ffffffff8ffffffff9fffff4ff8ffff
+;; 042:ffffffffffffffffffffff88ffff98fffff88889fff89f89ff8f99ffff898988
+;; 043:ffffffffffffffff8fffffff888fffff8f98ffff88f888ff989ff98f4888ff8f
+;; 044:ffffffffffffffffff8ffff8ff88fff8fff8f9ffffffffffff9fffffffffffff
+;; 045:ffffffff8fffffffffff8fffffffffffff88ff9ffff88fffffff88ffffffffff
 ;; 048:fff775fff777757ff755f7577777177717f11f7751551f7f555f11fff777777f
 ;; 049:f777777fff11f555f7f1551577f11f7177717777757f557ff757777fff577fff
 ;; 050:ffffffffff3333fff377773f3077773f3077773ff377773fff3333ffffffffff
 ;; 052:ffffffff111999ff1144919f11449449114494491144919f111999ffffffffff
 ;; 053:ffffffff911444991144499911444999114449991144499991144499ffffffff
 ;; 054:ffffffffffff1119fff44199f9441199f9441199fff44199ffff1119ffffffff
+;; 056:ffff9ff4fffff8ffffffff9ffffffff8ffffffffffffffffffffffffffffffff
+;; 057:4ff8ffffff9ffffff8ffffff9fffffffffffffffffffffffffffffffffffffff
+;; 058:fff99884ff9ff898ff988f9fff9f88f8ff999988fffffff9ffffffffffffffff
+;; 059:9f88ff8f889fff8ff8fff98f9f8898ff88ffffffffffffffffffffffffffffff
+;; 060:fff8fffffffffffffff8fffff8ffff99ff88fff9ffff88ffffffffffffffffff
+;; 061:ffff9fff8ffffffffffffffffff888ffffffffff99ffffff9fffffffffffffff
 ;; 064:ff000ffffffff0fffffff333ffff3777fff33777fff37777f337777733077777
 ;; 065:ff00ffff33ffffff333fffff7333000f77733fff77733fff77773fff77773fff
 ;; 066:fffff00ffffff0fffffff333ffff3777fff33777fff37777f337777733077777
