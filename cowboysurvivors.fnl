@@ -3,9 +3,9 @@
 ;; desc:    Vampire Survivors-like but western themed with tic80
 ;; site:    website link
 ;; license: MIT License (change this to your license of choice)
-;; version: 0.1
+;; version: 0.20
 ;; script:  fennel
-;; Cowboy Survivors - rewritten from s7 Scheme into Fennel for TIC-80.
+;; Cowboy Survivors
 
 (local screen-width 240)
 (local screen-height 136)
@@ -451,8 +451,6 @@
         (update-direction e)
         (update-time e)
         (update-hit-debounce e)
-        (when e.destroy?
-          (pool.pool-remove! object-pool idx))
 
         (if (= e.type :enemy)
             (do
@@ -467,7 +465,10 @@
             (e.update e)
 
             (= e.type :weapon)
-            (e.update e game-time))))
+            (e.update e game-time))
+
+        (when e.destroy?
+          (pool.pool-remove! object-pool idx))))
 
     {: update-hit-debounce : update-duration : update-time
      : update-direction : update-entity}))
@@ -578,7 +579,7 @@
     (fn make-big-tumbleweed [x y target]
       {:type :enemy :x x :y y :radius 8 :speed 1 :time 0 :target target
        :update enemy-follow-player :scale 2 :render render-entity
-       :sprite [304 305] :drop-xp 1 :hp 20})
+       :sprite [304 305] :drop-xp 2 :hp 20})
 
     (fn scarab-queen-update [e]
       (if (not (geometry.within? e.target e 72))
@@ -594,7 +595,7 @@
     (fn make-scarab-queen [x y target]
       {:type :enemy :x x :y y :radius 8 :speed 2 :time 0 :target target
        :update scarab-queen-update :render render-entity :scale 1
-       :sprite [[320 2 2] [322 2 2]] :drop-xp 4 :hp 15})
+       :sprite [[320 2 2] [322 2 2]] :drop-xp 2 :hp 15})
 
     (fn make-scarab [x y target]
       {:type :enemy :x x :y y :radius 4 :speed 4 :time 0 :target target
@@ -632,7 +633,7 @@
     (fn make-cactus [x y target]
       {:type :enemy :x x :y y :radius 8 :speed 2 :time 0 :target target
        :update cactus-update :render render-entity :scale 1
-       :sprite [[320 2 2] [322 2 2]] :drop-xp 4 :hp 50})
+       :sprite [[320 2 2] [322 2 2]] :drop-xp 3 :hp 50})
 
     (fn render-snake [snake]
       (each [_ link (ipairs snake.links)]
@@ -847,7 +848,6 @@
 (local dynamite
   (do
     (fn update-explosion [explosion]
-      (trace explosion.time)
       (when (= explosion.time 2)
         (explosion.collision-world.unregister! explosion))
       (when (= explosion.time 16)
@@ -887,22 +887,25 @@
        :collision-world collision-world :object-pool object-pool
        :sprite 265 :duration 120 :damage damage :update update-dynamite :render render-dynamite})
 
+    (local directions [[32.0 0.0] [0 32.0] [-32.0 0] [0 -32.0]])
+
     (fn update-dynamite-pouch [self object-pool collision-world]
       (tset self :cooldown (- self.cooldown 1))
 
       (when (<= self.cooldown 0)
         (let [cowboy self.player
-              directions [[32.0 0.0] [0 -32.0] [-32.0 0] [0 32.0]]
-              direction (utility.list->random directions)
+              direction (. directions self.next-dir)
               target-x (+ cowboy.x (. direction 1))
               target-y (+ cowboy.y (. direction 2))
               dynamite-stick (make-dynamite-stick collision-world object-pool cowboy.x cowboy.y target-x target-y self.damage)]
+          (set self.next-dir (+ 1 (% self.next-dir 4)))  
           (pool.pool-add! object-pool dynamite-stick)
           (tset self :cooldown self.max-cooldown))))
 
     (fn dynamite-pouch-blueprint []
       {:id :dynamite :type :upgrade :sprite 265 :name "Dynamite"
        :description "Leaves a dynamite on the ground that\nexplodes after a few seconds" :cooldown 210 :max-cooldown 210
+       :next-dir 1
        :damage 20 :stats [:max-cooldown :damage] :update update-dynamite-pouch})
 
     (fn make-dynamite-pouch [cowboy]
@@ -1124,6 +1127,10 @@
         (fn [a b]
           (enemies.damage-enemy! b a.damage)))
 
+      (collision-world.on-collision! :explosion :link
+        (fn [a b]
+          (enemies.damage-enemy! b a.damage)))
+
       (collision-world.on-collision! :projectile :enemy
         (fn [a b]
           (when (enemies.damage-enemy! b a.damage)
@@ -1147,13 +1154,13 @@
       [{:id :tumbleweed :cost 1 :min-time 0 :make enemies.make-tumbleweed}
        {:id :big-tumbleweed :cost 3 :min-time 40 :make enemies.make-big-tumbleweed}
        {:id :scarab-queen :cost 7 :min-time 80 :make enemies.make-scarab-queen}
-       {:id :cactus :cost 10 :min-time 130 :make enemies.make-cactus}])
+       {:id :cactus :cost 10 :min-time 110 :make enemies.make-cactus}])
 
     (fn available-enemies [elapsed]
       (utility.filter (fn [e] (<= e.min-time elapsed)) enemy-types))
 
     (fn current-budget [elapsed-seconds]
-      (+ 1 (* 0.05 elapsed-seconds)))
+      (+ 2 (* 0.05 elapsed-seconds)))
 
     (fn spend-budget [budget elapsed]
       (let [candidates (available-enemies elapsed)
@@ -1364,7 +1371,8 @@
                     (collision-world.unregister! (. event 2))
 
                     (= kind :spawn-xp)
-                    (table.insert gems (gem-module.make-xp-orb (. event 2) (. event 3)))
+                    (for [i 0 (- (. event 4) 1)]
+                      (table.insert gems (gem-module.make-xp-orb (+ (* i 3) (. event 2)) (+ (* i 3) (. event 3)))))
 
                     (= kind :spawn-scarab)
                     (let [scarab (enemies.make-scarab (. event 2) (. event 3) (. event 4))]
