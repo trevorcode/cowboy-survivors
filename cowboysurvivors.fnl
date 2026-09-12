@@ -3,7 +3,7 @@
 ;; desc:    Vampire Survivors-like but western themed with tic80
 ;; site:    website link
 ;; license: MIT License (change this to your license of choice)
-;; version: 0.20
+;; version: 0.21
 ;; script:  fennel
 ;; Cowboy Survivors
 
@@ -433,9 +433,7 @@
       (when e.duration
         (tset e :duration (- e.duration 1))
         (when (<= e.duration 0)
-          (tset e :destroy? true)
-          (when e.collision-id
-            (events.add-event! [:collision-unregister e])))))
+          (tset e :destroy? true))))
 
     (fn update-time [e]
       (when e.time (tset e :time (+ e.time 1))))
@@ -445,7 +443,7 @@
         (tset e :x (+ e.x (* e.direction.x (/ e.speed 10))))
         (tset e :y (+ e.y (* e.direction.y (/ e.speed 10))))))
 
-    (fn update-entity [e game-time object-pool idx]
+    (fn update-entity [e game-time object-pool collision-world idx]
       (when e
         (update-duration e)
         (update-direction e)
@@ -457,8 +455,7 @@
               (when (and e.hp (<= e.hp 0))
                 (when e.drop-xp
                   (events.add-event! [:spawn-xp e.x e.y e.drop-xp]))
-                (tset e :destroy? true)
-                (events.add-event! [:collision-unregister e]))
+                (tset e :destroy? true))
               (when e.update (e.update e)))
 
             (or (= e.type :projectile) (= e.type :boss) (= e.type :dynamite) (= e.type :explosion))
@@ -468,6 +465,7 @@
             (e.update e game-time))
 
         (when e.destroy?
+          (when e.collision-id (collision-world.unregister! e))
           (pool.pool-remove! object-pool idx))))
 
     {: update-hit-debounce : update-duration : update-time
@@ -866,6 +864,7 @@
              :time 0 :sprite [[296 2 2] [298 2 2] [300 2 2]] :damage damage :update update-explosion
              :collision-world collision-world
              :render render-explosion}]
+        (sfx 1 (+ 10 (math.random 5)) 60 0 15 0)
         (collision-world.register! explosion)
         (pool.pool-add! object-pool explosion)))
 
@@ -964,6 +963,7 @@
           (let [bullet (projectile.make-projectile cowboy.x cowboy.y
                          (geometry.direction-to cowboy self.target)
                          40 (+ cowboy.extra-damage self.damage))]
+            (sfx 1 (+ 50 (math.random 5)) 60 0 15 1)
             (pool.pool-add! object-pool bullet)
             (collision-world.register! bullet))
           (tset self :target nil)
@@ -1051,6 +1051,7 @@
     (fn damage-cowboy! [e amount]
       (when (not e.hit-debounce)
         (tset e :hp (- e.hp amount))
+        (sfx 2 (+ 16 (math.random 5)) 80 3 15 0)
         (ui-module.shake-effect! 2 10)
         (tset e :hit-debounce 50)
         (tset e :white-flash? true)
@@ -1117,8 +1118,7 @@
       (collision-world.on-collision! :projectile :link
         (fn [a b]
           (when (enemies.damage-enemy! b a.damage)
-            (tset a :destroy? true)
-            (events.add-event! [:collision-unregister a]))))
+            (tset a :destroy? true))))
 
       (collision-world.on-collision! :weapon :link
         (fn [w e] (enemies.damage-enemy! e (+ w.cowboy.extra-damage w.damage))))
@@ -1134,8 +1134,7 @@
       (collision-world.on-collision! :projectile :enemy
         (fn [a b]
           (when (enemies.damage-enemy! b a.damage)
-            (tset a :destroy? true)
-            (events.add-event! [:collision-unregister a]))))
+            (tset a :destroy? true))))
 
       (collision-world.on-collision! :weapon :enemy
         (fn [w e] (enemies.damage-enemy! e (+ w.cowboy.extra-damage w.damage))))
@@ -1354,7 +1353,7 @@
           (enemy-waves.spawn-enemies entity-pool collision-world cowboy game-time)
 
           (pool.pool-for-each entity-pool
-            (fn [e i] (entity-helpers.update-entity e game-time entity-pool i)))
+            (fn [e i] (entity-helpers.update-entity e game-time entity-pool collision-world i)))
 
           (each [_ upgrade (ipairs cowboy.upgrades)]
             (when upgrade.update
@@ -1409,7 +1408,7 @@
 
     (fn render-main-menu-scene [menu-options selected]
       (cls 0)
-      (ui-module.draw-center-text "Cowboy Survivors v0.20" 5)
+      (ui-module.draw-center-text "Cowboy Survivors v0.21" 5)
       (utility.for-each-indexed
         (fn [option i] (menu-option 70 30 option.text (= selected i)))
         menu-options)
@@ -1536,6 +1535,9 @@
 
 ;; <SFX>
 ;; 000:000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000304000000000
+;; 001:44c024d014f014f014f014f014e034e044d064d064b074b094a0a480a480b470b470b460b450b450b440c430c430d420d420e420f410f410f410f41000a000000000
+;; 002:020302f302e402d402a40295027402440234022302130202020e020b020b020a020a020a020a020a020a0209020a0209020a020b020c020d0200020010a000000000
+;; 003:03070307f307f300f300f300f300f300f300f300f300f300f300f300f300f300f300f300f300130013001300f300f300f300f300f300f300f300f300d3a000000000
 ;; </SFX>
 
 ;; <TRACKS>
