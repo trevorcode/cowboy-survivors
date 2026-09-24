@@ -271,6 +271,11 @@
             min-dist (+ a.radius b.radius)]
         (< dist-sq (* min-dist min-dist))))
 
+    (fn distance-squared [x1 y1 x2 y2]
+      (let [dist-x (- x1 x2)
+            dist-y (- y1 y2)]
+        (+ (* dist-x dist-x) (* dist-y dist-y)))) 
+
     (fn within-raw? [x1 y1 x2 y2 dist]
       (let [dist-x (- x1 x2)
             dist-y (- y1 y2)
@@ -290,7 +295,7 @@
               {:x (/ dx dist) :y (/ dy dist)}))))
 
     {: vec2 : vec2-x : vec2-y : vec2-add : vec2-sub : vec2-scale
-     : overlapping? : within-raw? : within? : direction-to}))
+     : overlapping? : within-raw? : within? : direction-to : distance-squared}))
 
 (local collision
   (do
@@ -715,19 +720,52 @@
 
 (local gem-module
   (do
-    (fn make-xp-orb [x y] [x y 259])
+    (fn make-xp-orb [x y] [x y])
     (fn gem-x [g] (. g 1))
     (fn gem-y [g] (. g 2))
-    (fn gem-sprite [g] (. g 3))
+    (local gem-sprite 259)
+    
+    (fn normalize! [v]
+      "Assume that v is a vector in shape of [x y], modify the existing vector to normalize"
+      (let [x (. v 1)
+            y (. v 2)
+            len (math.sqrt (+ (* x x) (* y y)))]
+        (doto v
+          (tset 1 (/ x len))
+          (tset 2 (/ y len)))))  
+
+    (fn direction-to [x1 y1 x2 y2]
+      (normalize! [(- x2 x1) (- y2 y1)])) 
+
+    (fn vector-add! [v1 v2]
+      (doto v1
+        (tset 1 (+ (. v1 1) (. v2 1)))
+        (tset 2 (+ (. v1 2) (. v2 2)))))
+
+    (fn vector-divide! [v amount]
+      (doto v
+        (tset 1 (/ (. v 1) amount))
+        (tset 2 (/ (. v 2) amount))))
 
     (fn render-gem [g]
       (let [(sx sy) (camera.camera-transform (gem-x g) (gem-y g))]
-        (spr (gem-sprite g) sx sy 15 1 0 0 1 1)))
+        (spr gem-sprite sx sy 15 1 0 0 1 1)))
+
+    (local actual-collection-radius 2)
+    (local max-slowdown 4)
 
     (fn update-gem [g cowboy collect-xp!]
-      (if (geometry.within-raw? (gem-x g) (gem-y g) cowboy.x cowboy.y cowboy.collection-radius)
-          (do (collect-xp! cowboy 1) nil)
-          g))
+      (let [dist-sq-from-gem (geometry.distance-squared (gem-x g) (gem-y g)
+                                                        cowboy.x cowboy.y)
+            pull-radius-squared (* cowboy.collection-radius cowboy.collection-radius)]
+        (if (< dist-sq-from-gem actual-collection-radius)
+            (do (collect-xp! cowboy 1) nil)
+            (< dist-sq-from-gem pull-radius-squared)
+            (let [slowdown (math.max 1 (* (/ dist-sq-from-gem pull-radius-squared) max-slowdown))
+                  direction (vector-divide! (direction-to (gem-x g) (gem-y g) cowboy.x cowboy.y) slowdown)]
+              (doto g
+                (vector-add! direction)))
+            g)))
 
     {: make-xp-orb : render-gem : update-gem}))
 
